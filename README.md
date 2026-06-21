@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12,20,24&height=220&section=header&text=HORUS&fontSize=110&fontColor=fff&fontAlignY=40&desc=%F0%9F%94%B1%20The%20All-Seeing%20Eye%20%E2%80%94%20IOC%20Enrichment%20%26%20PE%20Static%20Analysis&descAlignY=64&descSize=17&descColor=adb5bd&animation=fadeIn" width="100%"/>
+<img src="assets/banner.svg" width="100%" alt="HORUS — The All-Seeing Eye"/>
 
 <br/>
 
@@ -444,7 +444,7 @@ MIT — see [LICENSE](LICENSE). Free for personal, commercial, and research use 
 
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12,20,24&height=140&section=footer&animation=fadeIn" width="100%"/>
+<img src="assets/banner.svg" width="100%" alt=""/>
 
 **Built for defenders. Free forever. No strings attached.**
 
