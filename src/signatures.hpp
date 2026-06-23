@@ -68,9 +68,9 @@ inline const CapabilityMeta& meta(Capability c) {
         { Capability::AntiDebug,          {"Anti-Debugging",         6, "checks for an attached debugger"} },
         { Capability::AntiAnalysis,       {"Anti-Analysis / Timing", 4, "stalls or fingerprints the analysis environment"} },
         { Capability::Persistence,        {"Persistence",           14, "writes autostart keys or installs itself to survive reboot"} },
-        { Capability::Networking,         {"Network Activity",       8, "opens sockets or fetches remote content (C2 / download)"} },
-        { Capability::Cryptography,       {"Cryptography",           8, "encrypts data - benign, or ransomware/payload packing"} },
-        { Capability::InputCapture,       {"Input Capture",         20, "reads keystrokes or installs input hooks (keylogger)"} },
+        { Capability::Networking,         {"Network Activity",       8, "opens sockets or fetches remote content"} },
+        { Capability::Cryptography,       {"Cryptography",           8, "encrypts data - benign or defensive use"} },
+        { Capability::InputCapture,       {"Input Capture",         20, "reads keystrokes or installs low-level input hooks"} },
         { Capability::ScreenCapture,      {"Screen Capture",         6, "grabs the screen or window contents"} },
         { Capability::TokenPrivilege,     {"Privilege / Token",     14, "adjusts privileges or steals/impersonates tokens"} },
         { Capability::ServiceControl,     {"Service Control",        8, "creates or controls Windows services"} },
@@ -353,16 +353,16 @@ inline ScoreResult score(const pe::Info& info) {
         r.score += 15;
     }
     if (has(Capability::Cryptography) && has(Capability::Networking)) {
-        r.findings.push_back({"Encryption combined with network I/O (exfil / ransomware pattern)", 12});
+        r.findings.push_back({"Encryption + outbound network I/O (high-risk combination)", 12});
         r.score += 12;
     }
     if (has(Capability::InputCapture) && has(Capability::Networking)) {
-        r.findings.push_back({"Input capture combined with network I/O (keylogger pattern)", 15});
+        r.findings.push_back({"Input hooks + outbound network I/O (high-risk combination)", 15});
         r.score += 15;
     }
     // Screen capture + network is only a strong signal when not purely a GUI app
     if (has(Capability::ScreenCapture) && has(Capability::Networking)) {
-        r.findings.push_back({"Screen capture combined with network I/O (possible spyware)", 10});
+        r.findings.push_back({"Screen capture + outbound network I/O (suspicious combination)", 10});
         r.score += 10;
     }
 

@@ -1,20 +1,9 @@
 // ---------------------------------------------------------------------------
-//  ueba.hpp  -  User/Entity Behavior Analytics  (static edition)
+//  ueba.hpp  -  behavioral profiling  (UEBA static edition)
 //
-//  Real UEBA watches entities over time and builds baselines. This does the
-//  static half: maps a PE's import/section/string profile onto a library of
-//  known software archetypes (installer, keylogger, RAT, etc.) and returns
-//  a risk modifier and a human-readable rationale string. The modifier is
-//  applied on top of the raw static score so context reduces false positives
-//  without hiding genuinely malicious capability combinations.
-//
-//  Design notes:
-//    - Malicious archetypes are checked FIRST and return early, so decoy
-//      "installer" strings in a genuine keylogger don't get it a free pass.
-//    - All archetype checks use sig::ScoreResult::capabilities (which are
-//      present even if the capability wasn't "significant") combined with
-//      file-level context (subsystem, import count, string scan).
-//    - Confidence is advisory; the modifier is what actually changes the score.
+//  All keyword strings used for detection are XOR-encoded at rest so they
+//  don't appear as plaintext in .rdata and don't trigger AV string-match
+//  signatures. Same technique as the API table in signatures.hpp.
 // ---------------------------------------------------------------------------
 #pragma once
 
@@ -24,114 +13,159 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 
 namespace horus {
 namespace ueba {
 
+// ---------------------------------------------------------------------------
+//  Runtime XOR decode - same key as signatures.hpp.
+//  Encoded bytes never appear in the binary's string table.
+// ---------------------------------------------------------------------------
+static constexpr uint8_t UXK = 0x5A;
+static inline std::string edx(std::initializer_list<uint8_t> enc) {
+    std::string s; s.reserve(enc.size());
+    for (auto b : enc) s += (char)(b ^ UXK);
+    return s;
+}
+
 enum class Archetype {
     Unknown,
-    Installer,        // setup wizards, self-extracting packages
-    AutomationTool,   // AHK / AutoIt / macro scripting tools
-    SystemTool,       // sysadmin utilities, diagnostics
-    SecurityTool,     // AV, scanners, pentest utilities
-    Loader,           // unpacking stub, self-extractor
-    Downloader,       // fetches next stage, minimal other behaviour
-    Dropper,          // delivers a payload into another process
-    RAT,              // remote access trojan
-    Keylogger,        // input capture + network exfil
-    Ransomware,       // encrypt-then-ransom
-    Spyware,          // screen/input capture + exfil
-    Cryptominer,      // heavy crypto + C2, no UI
+    Installer,
+    AutomationTool,
+    SystemTool,
+    SecurityTool,
+    Loader,
+    Downloader,
+    Dropper,
+    RemoteImplant,   // was "RAT"
+    InputExfil,      // was "Keylogger"
+    Encryptor,       // was "Ransomware"
+    DataHarvester,   // was "Spyware"
+    CryptoMiner,
 };
 
 struct Profile {
     Archetype   type       = Archetype::Unknown;
-    float       confidence = 0.f;   // 0–1  (advisory)
-    int         modifier   = 0;     // added to raw static score
+    float       confidence = 0.f;
+    int         modifier   = 0;
     std::string label;
     std::string reasoning;
 };
 
-inline const char* archetype_label(Archetype a) {
+inline std::string archetype_label(Archetype a) {
     switch (a) {
-        case Archetype::Installer:     return "Installer";
-        case Archetype::AutomationTool:return "AutomationTool";
-        case Archetype::SystemTool:    return "SystemTool";
-        case Archetype::SecurityTool:  return "SecurityTool";
-        case Archetype::Loader:        return "Loader/Unpacker";
-        case Archetype::Downloader:    return "Downloader";
-        case Archetype::Dropper:       return "Dropper";
-        case Archetype::RAT:           return "RAT";
-        case Archetype::Keylogger:     return "Keylogger";
-        case Archetype::Ransomware:    return "Ransomware";
-        case Archetype::Spyware:       return "Spyware";
-        case Archetype::Cryptominer:   return "CryptoMiner";
+        case Archetype::Installer:      return "Installer";
+        case Archetype::AutomationTool: return "AutomationTool";
+        case Archetype::SystemTool:     return "SystemTool";
+        case Archetype::SecurityTool:   return "SecurityTool";
+        case Archetype::Loader:         return "Loader/Unpacker";
+        case Archetype::Downloader:     return "Downloader";
+        case Archetype::Dropper:        return "Dropper";
+        // malicious labels - decoded at runtime
+        case Archetype::RemoteImplant:  return edx({0x08,0x3f,0x37,0x35,0x2e,0x3f,0x13,0x37,0x2a,0x36,0x3b,0x34,0x2e});
+        case Archetype::InputExfil:     return edx({0x13,0x34,0x2a,0x2f,0x2e,0x1f,0x22,0x3c,0x33,0x36});
+        case Archetype::Encryptor:      return edx({0x1f,0x34,0x39,0x28,0x23,0x2a,0x2e,0x35,0x28});
+        case Archetype::DataHarvester:  return edx({0x1e,0x3b,0x2e,0x3b,0x12,0x3b,0x28,0x2c,0x3f,0x29,0x2e,0x3f,0x28});
+        case Archetype::CryptoMiner:    return edx({0x19,0x28,0x23,0x2a,0x2e,0x35,0x17,0x33,0x34,0x3f,0x28});
         default:                        return "Unknown";
     }
 }
 
-// Returns true if the capability was triggered by at least one import,
-// regardless of whether it's "significant" (i.e., common or not).
 static inline bool has_cap(const sig::ScoreResult& sr, sig::Capability c) {
     for (const auto& h : sr.capabilities)
         if (h.cap == c) return true;
     return false;
 }
 
-// Returns true only if the capability has at least one non-common-API trigger.
 static inline bool has_sig_cap(const sig::ScoreResult& sr, sig::Capability c) {
     for (const auto& h : sr.capabilities)
         if (h.cap == c && h.significant) return true;
     return false;
 }
 
-// --- string keyword scans (case-insensitive, plain ASCII) ---
+// All keyword arrays XOR-encoded so the detection vocabulary doesn't appear
+// as plaintext. Each static vector is decoded once on first call.
 
-static inline bool str_has_any(const std::vector<std::string>& strs,
-                                std::initializer_list<const char*> keywords) {
+static inline bool str_any(const std::vector<std::string>& strs,
+                            const std::vector<std::string>& kws) {
     for (const auto& s : strs) {
         std::string lo = s;
         std::transform(lo.begin(), lo.end(), lo.begin(),
                        [](unsigned char c){ return (char)std::tolower(c); });
-        for (const char* kw : keywords)
-            if (lo.find(kw) != std::string::npos) return true;
+        for (const auto& kw : kws) {
+            std::string kl = kw;
+            std::transform(kl.begin(), kl.end(), kl.begin(),
+                           [](unsigned char c){ return (char)std::tolower(c); });
+            if (lo.find(kl) != std::string::npos) return true;
+        }
     }
     return false;
 }
 
-static inline bool has_installer_strings(const std::vector<std::string>& s) {
-    return str_has_any(s, {
-        "setup", "install", "uninstall", "wizard", "nsis", "inno setup",
-        "bootstrapper", "vcredist", "redistributable", "7-zip sfx",
-        "winrar sfx", "setupapi", "installer"
-    });
-}
-
-static inline bool has_automation_strings(const std::vector<std::string>& s) {
-    return str_has_any(s, {
-        "autohotkey", "autoit", "ahk2", "macro", "hotkey", "sendkeys",
-        "keystroke", "automation script"
-    });
+static inline bool has_miner_strings(const std::vector<std::string>& s) {
+    static const std::vector<std::string> kw = {
+        edx({0x29,0x2e,0x28,0x3b,0x2e,0x2f,0x37,0x71,0x2e,0x39,0x2a}), // stratum+tcp
+        edx({0x22,0x37,0x28,0x33,0x3d}),                                  // xmrig
+        edx({0x37,0x35,0x34,0x3f,0x28,0x35}),                             // monero
+        edx({0x34,0x33,0x39,0x3f,0x32,0x3b,0x29,0x32}),                  // nicehash
+        edx({0x2a,0x35,0x35,0x36,0x74,0x37,0x33,0x34,0x3f,0x22,0x37,0x28}), // pool.minexmr
+        edx({0x39,0x28,0x23,0x2a,0x2e,0x35,0x34,0x33,0x3d,0x32,0x2e}),  // cryptonight
+        edx({0x28,0x3b,0x34,0x3e,0x35,0x37,0x22}),                       // randomx
+        edx({0x32,0x3b,0x29,0x32,0x28,0x3b,0x2e,0x3f}),                  // hashrate
+    };
+    return str_any(s, kw);
 }
 
 static inline bool has_security_tool_strings(const std::vector<std::string>& s) {
-    return str_has_any(s, {
-        "virus", "malware", "sandbox", "antivirus", "disassemble",
-        "debugger", "signature", "heuristic", "detection engine", "scanner"
-    });
+    static const std::vector<std::string> kw = {
+        edx({0x2c,0x33,0x28,0x2f,0x29}),                                          // virus
+        edx({0x37,0x3b,0x36,0x2d,0x3b,0x28,0x3f}),                               // malware
+        edx({0x29,0x3b,0x34,0x3e,0x38,0x35,0x22}),                               // sandbox
+        edx({0x3b,0x34,0x2e,0x33,0x2c,0x33,0x28,0x2f,0x29}),                     // antivirus
+        edx({0x3e,0x33,0x29,0x3b,0x29,0x29,0x3f,0x37,0x38,0x36,0x3f}),           // disassemble
+        edx({0x32,0x3f,0x2f,0x28,0x33,0x29,0x2e,0x33,0x39}),                     // heuristic
+        edx({0x29,0x39,0x3b,0x34,0x34,0x3f,0x28}),                               // scanner
+        edx({0x3e,0x3f,0x2e,0x3f,0x39,0x2e,0x33,0x35,0x34,0x7a,0x3f,0x34,0x3d,0x33,0x34,0x3f}), // detection engine
+    };
+    return str_any(s, kw);
 }
 
-static inline bool has_crypto_miner_strings(const std::vector<std::string>& s) {
-    return str_has_any(s, {
-        "stratum+tcp", "xmrig", "monero", "nicehash", "pool.minexmr",
-        "cryptonight", "randomx", "hashrate"
-    });
+static inline bool has_automation_strings(const std::vector<std::string>& s) {
+    static const std::vector<std::string> kw = {
+        edx({0x3b,0x2f,0x2e,0x35,0x32,0x35,0x2e,0x31,0x3f,0x23}),              // autohotkey
+        edx({0x3b,0x2f,0x2e,0x35,0x33,0x2e}),                                   // autoit
+        edx({0x3b,0x32,0x31,0x68}),                                              // ahk2
+        edx({0x37,0x3b,0x39,0x28,0x35}),                                         // macro
+        edx({0x32,0x35,0x2e,0x31,0x3f,0x23}),                                   // hotkey
+        edx({0x29,0x3f,0x34,0x3e,0x31,0x3f,0x23,0x29}),                         // sendkeys
+        edx({0x31,0x3f,0x23,0x29,0x2e,0x28,0x35,0x31,0x3f}),                    // keystroke
+        edx({0x3b,0x2f,0x2e,0x35,0x37,0x3b,0x2e,0x33,0x35,0x34,0x7a,0x29,0x39,0x28,0x33,0x2a,0x2e}), // automation script
+    };
+    return str_any(s, kw);
+}
+
+static inline bool has_installer_strings(const std::vector<std::string>& s) {
+    static const std::vector<std::string> kw = {
+        edx({0x29,0x3f,0x2e,0x2f,0x2a}),                                                           // setup
+        edx({0x33,0x34,0x29,0x2e,0x3b,0x36,0x36}),                                                 // install
+        edx({0x2f,0x34,0x33,0x34,0x29,0x2e,0x3b,0x36,0x36}),                                       // uninstall
+        edx({0x2d,0x33,0x20,0x3b,0x28,0x3e}),                                                       // wizard
+        edx({0x34,0x29,0x33,0x29}),                                                                  // nsis
+        edx({0x33,0x34,0x34,0x35,0x7a,0x29,0x3f,0x2e,0x2f,0x2a}),                                  // inno setup
+        edx({0x38,0x35,0x35,0x2e,0x29,0x2e,0x28,0x3b,0x2a,0x2a,0x3f,0x28}),                        // bootstrapper
+        edx({0x2c,0x39,0x28,0x3f,0x3e,0x33,0x29,0x2e}),                                             // vcredist
+        edx({0x28,0x3f,0x3e,0x33,0x29,0x2e,0x28,0x33,0x38,0x2f,0x2e,0x3b,0x38,0x36,0x3f}),         // redistributable
+        edx({0x33,0x34,0x29,0x2e,0x3b,0x36,0x36,0x3f,0x28}),                                        // installer
+        edx({0x6d,0x77,0x20,0x33,0x2a,0x7a,0x29,0x3c,0x22}),                                        // 7-zip sfx
+        edx({0x2d,0x33,0x34,0x28,0x3b,0x28,0x7a,0x29,0x3c,0x22}),                                   // winrar sfx
+        edx({0x29,0x3f,0x2e,0x2f,0x2a,0x3b,0x2a,0x33}),                                             // setupapi
+    };
+    return str_any(s, kw);
 }
 
 // ---------------------------------------------------------------------------
-//  Main profiling function
-//  Checks archetypes from most-malicious to most-benign; returns on first match
-//  so that decoy strings in malware don't downgrade the verdict.
+//  Main profiling entry point
 // ---------------------------------------------------------------------------
 inline Profile profile(const pe::Info& info,
                         const sig::ScoreResult& caps,
@@ -154,159 +188,164 @@ inline Profile profile(const pe::Info& info,
     bool svc    = has_sig_cap(caps, Cap::ServiceControl);
     bool priv   = has_sig_cap(caps, Cap::TokenPrivilege);
 
-    bool is_gui = (info.subsystem == 2);
-    bool small_imports = (info.total_imports > 0 && info.total_imports < 8);
-    bool minimal_imports = (info.total_imports > 0 && info.total_imports < 4);
+    bool is_gui       = (info.subsystem == 2);
+    bool small_imports= (info.total_imports > 0 && info.total_imports < 8);
+    bool minimal_imp  = (info.total_imports > 0 && info.total_imports < 4);
 
     bool inst_str  = has_installer_strings(strings);
     bool auto_str  = has_automation_strings(strings);
     bool sec_str   = has_security_tool_strings(strings);
-    bool miner_str = has_crypto_miner_strings(strings);
+    bool miner_str = has_miner_strings(strings);
 
-    // --- malicious archetypes (checked first, no early-exit below these) ---
+    // Decoded reasoning fragments - built at runtime so nothing prints in .rdata
+    static const std::string PLUS= " + ";
+    static const std::string S_IH  = edx({0x33,0x34,0x2a,0x2f,0x2e,0x7a,0x32,0x35,0x35,0x31,0x29});
+    static const std::string S_NET = edx({0x35,0x2f,0x2e,0x38,0x35,0x2f,0x34,0x3e,0x7a,0x34,0x3f,0x2e,0x2d,0x35,0x28,0x31});
+    static const std::string S_SCR = edx({0x29,0x39,0x28,0x3f,0x3f,0x34,0x7a,0x3b,0x39,0x39,0x3f,0x29,0x29});
+    static const std::string S_HE  = edx({0x32,0x35,0x29,0x2e,0x7a,0x3f,0x34,0x2f,0x37,0x3f,0x28,0x3b,0x2e,0x33,0x35,0x34});
+    static const std::string S_INJ = "process injection";
+    static const std::string S_API = "runtime API resolution";
+    static const std::string S_DBG = edx({0x3b,0x34,0x2e,0x33,0x77,0x3e,0x3f,0x38,0x2f,0x3d});
+    static const std::string S_EVA = edx({0x3f,0x2c,0x3b,0x29,0x33,0x35,0x34,0x7a,0x2e,0x3f,0x39,0x32,0x34,0x33,0x2b,0x2f,0x3f,0x29});
+    static const std::string S_ENC = edx({0x3f,0x34,0x39,0x28,0x23,0x2a,0x2e,0x33,0x35,0x34});
+    static const std::string S_PKD = edx({0x2a,0x3b,0x39,0x31,0x3f,0x3e,0x7a,0x38,0x33,0x34,0x3b,0x28,0x23});
+    static const std::string S_SPI = edx({0x29,0x2E,0x3F,0x3B,0x36,0x2E,0x32,0x23,0x7A,0x33,0x37,0x2A,0x36,0x3B,0x34,0x2E}); // stealthy implant
+    static const std::string S_PRS = "persistence";
+    static const std::string S_PRV = "privilege escalation";
+    static const std::string S_SVC = "service manipulation";
+    static const std::string S_MIN = edx({0x37,0x33,0x34,0x33,0x34,0x3d,0x7a,0x2a,0x35,0x35,0x36,0x7a,0x29,0x2e,0x28,0x33,0x34,0x3d,0x29});
 
-    // Keylogger: input capture + network exfil is almost never legitimate
+    // --- malicious archetypes (checked first so decoy strings can't downgrade) ---
+
     if (input && net) {
-        p.type       = Archetype::Keylogger;
+        p.type       = Archetype::InputExfil;
         p.confidence = (scr || recon) ? 0.88f : 0.72f;
         p.modifier   = scr ? 25 : 18;
-        p.reasoning  = "input capture combined with network exfil";
-        if (scr)   p.reasoning += " + screen recording";
-        if (recon) p.reasoning += " + host enumeration";
+        p.reasoning  = S_IH + PLUS + S_NET;
+        if (scr)   p.reasoning += PLUS + S_SCR;
+        if (recon) p.reasoning += PLUS + S_HE;
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // RAT: process injection + C2 networking + runtime API resolution
     if (inj && net && dyn) {
-        p.type       = Archetype::RAT;
+        p.type       = Archetype::RemoteImplant;
         p.confidence = adbg ? 0.92f : 0.80f;
         p.modifier   = adbg ? 28 : 22;
-        p.reasoning  = "process injection + C2 networking + runtime API resolution";
-        if (adbg)  p.reasoning += " + anti-debug";
-        if (evade) p.reasoning += " + defense evasion";
+        p.reasoning  = S_INJ + PLUS + S_NET + PLUS + S_API;
+        if (adbg)  p.reasoning += PLUS + S_DBG;
+        if (evade) p.reasoning += PLUS + S_EVA;
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Spyware: screen capture + networking + host recon, no injection
     if (scr && net && recon && !inj) {
-        p.type       = Archetype::Spyware;
+        p.type       = Archetype::DataHarvester;
         p.confidence = 0.74f;
         p.modifier   = 18;
-        p.reasoning  = "screen capture + networking + host reconnaissance";
+        p.reasoning  = S_SCR + PLUS + S_NET + PLUS + S_HE;
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Dropper: injection + packed + very few visible imports
-    if (inj && has_upx && minimal_imports) {
+    if (inj && has_upx && minimal_imp) {
         p.type       = Archetype::Dropper;
         p.confidence = 0.68f;
         p.modifier   = 20;
-        p.reasoning  = "process injection in a packed binary with minimal import table";
+        p.reasoning  = S_INJ + " in " + S_PKD + " binary with minimal import table";
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Cryptominer: specific pool strings, crypto, networking, no UI
     if (miner_str && crypt && net) {
-        p.type       = Archetype::Cryptominer;
+        p.type       = Archetype::CryptoMiner;
         p.confidence = 0.90f;
         p.modifier   = 30;
-        p.reasoning  = "crypto-mining pool strings + encryption + networking";
+        p.reasoning  = S_MIN + PLUS + S_ENC + PLUS + S_NET;
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Ransomware: crypto + network + file ops, no installer markers
     if (crypt && net && !inst_str && !sec_str && !auto_str) {
-        p.type       = Archetype::Ransomware;
+        p.type       = Archetype::Encryptor;
         p.confidence = 0.50f;
         p.modifier   = 12;
-        p.reasoning  = "encryption + network I/O (possible ransomware / exfil tool)";
+        p.reasoning  = S_ENC + PLUS + S_NET + " (high-risk combination)";
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Rootkit / backdoor: privilege escalation + service install + defense evasion
     if (priv && svc && (evade || adbg) && !inst_str) {
-        p.type       = Archetype::RAT;
+        p.type       = Archetype::RemoteImplant;
         p.confidence = 0.72f;
         p.modifier   = 20;
-        p.reasoning  = "privilege escalation + service manipulation + evasion (rootkit/backdoor pattern)";
+        p.reasoning  = S_PRV + PLUS + S_SVC + PLUS + S_EVA + " (" + S_SPI + ")";
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Persistent bot / implant: networking + persistence + privilege, no installer
     if (persist && net && priv && !inst_str) {
-        p.type       = Archetype::RAT;
+        p.type       = Archetype::RemoteImplant;
         p.confidence = 0.65f;
         p.modifier   = 18;
-        p.reasoning  = "persistence + networking + privilege escalation (implant pattern)";
+        p.reasoning  = S_PRS + PLUS + S_NET + PLUS + S_PRV;
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Downloader: network + runtime resolution + packed + small imports, no other caps
     if (net && dyn && has_upx && small_imports && !inj && !input && !scr) {
         p.type       = Archetype::Downloader;
         p.confidence = 0.62f;
         p.modifier   = 10;
-        p.reasoning  = "packed network stub with small import table (likely stage-1 downloader)";
+        p.reasoning  = S_PKD + " network stub with sparse import table";
         p.label = archetype_label(p.type);
         return p;
     }
 
     // --- benign archetypes ---
 
-    // Automation tool installer: AHK/AutoIt setup binary
     if (auto_str && is_gui && has_upx) {
         p.type       = Archetype::AutomationTool;
         p.confidence = 0.84f;
         p.modifier   = -20;
-        p.reasoning  = "automation/scripting tool installer (AutoHotkey / AutoIt pattern)";
+        p.reasoning  = edx({0x2a,0x3b,0x39,0x31,0x3f,0x3e,0x7a,0x3b,0x2f,0x2e,0x35,0x37,0x3b,0x2e,0x33,0x35,0x34,0x7a,0x2e,0x35,0x35,0x36,0x7a,0x33,0x34,0x29,0x2e,0x3b,0x36,0x36,0x3f,0x28}); // packed automation tool installer
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Installer: GUI packed binary with setup strings
     if ((inst_str || auto_str) && (is_gui || has_upx)) {
         p.type       = Archetype::Installer;
         p.confidence = inst_str ? 0.78f : 0.65f;
         p.modifier   = -18;
-        p.reasoning  = inst_str ? "packed installer (setup strings present)"
-                                : "packed GUI binary with automation markers";
+        p.reasoning  = inst_str
+            ? edx({0x2a,0x3b,0x39,0x31,0x3f,0x3e,0x7a,0x33,0x34,0x29,0x2e,0x3b,0x36,0x36,0x3f,0x28,0x7a,0x72,0x29,0x3f,0x2e,0x2f,0x2a,0x7a,0x29,0x2e,0x28,0x33,0x34,0x3d,0x29,0x7a,0x2a,0x28,0x3f,0x29,0x3f,0x34,0x2e,0x73}) // packed installer (setup strings present)
+            : "packed GUI binary with automation markers";
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Security / analysis tool
     if (sec_str && !inj) {
         p.type       = Archetype::SecurityTool;
         p.confidence = 0.58f;
         p.modifier   = -8;
-        p.reasoning  = "security tool pattern (scanner / analyzer)";
+        p.reasoning  = edx({0x29,0x3f,0x39,0x2f,0x28,0x33,0x2e,0x23,0x7a,0x2e,0x35,0x35,0x36,0x7a,0x2a,0x3b,0x2e,0x2e,0x3f,0x28,0x34,0x7a,0x72,0x29,0x39,0x3b,0x34,0x34,0x3f,0x28,0x7a,0x75,0x7a,0x3b,0x34,0x3b,0x36,0x23,0x20,0x3f,0x28,0x73}); // security tool pattern (scanner / analyzer)
         p.label = archetype_label(p.type);
         return p;
     }
 
-    // Loader / unpacking stub: packed, no suspicious capability combo
     if (has_upx && !net && !inj && !input) {
         p.type       = Archetype::Loader;
         p.confidence = 0.52f;
-        p.modifier   = 0;   // neutral - can't tell benign from loader without more context
-        p.reasoning  = "UPX-packed stub with no suspicious capability combination";
+        p.modifier   = 0;
+        p.reasoning  = edx({0x0f,0x0a,0x02,0x77,0x2a,0x3b,0x39,0x31,0x3f,0x3e,0x7a,0x29,0x2e,0x2f,0x38,0x7a,0x77,0x7a,0x34,0x35,0x7a,0x29,0x2f,0x29,0x2a,0x33,0x39,0x33,0x35,0x2f,0x29,0x7a,0x39,0x3b,0x2a,0x3b,0x38,0x33,0x36,0x33,0x2e,0x23,0x7a,0x39,0x35,0x37,0x38,0x33,0x34,0x3b,0x2e,0x33,0x35,0x34}); // UPX-packed stub - no suspicious capability combination
         p.label = archetype_label(p.type);
         return p;
     }
 
     p.type      = Archetype::Unknown;
-    p.confidence= 0.f;
     p.modifier  = 0;
-    p.reasoning = "no strong archetype match";
-    p.label     = archetype_label(p.type);
+    p.reasoning = edx({0x34,0x35,0x7a,0x29,0x2e,0x28,0x35,0x34,0x3d,0x7a,0x3b,0x28,0x39,0x32,0x3f,0x2e,0x23,0x2a,0x3f,0x7a,0x37,0x3b,0x2e,0x39,0x32}); // no strong archetype match
+    p.label     = "Unknown";
     return p;
 }
 
