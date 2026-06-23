@@ -57,7 +57,7 @@ inline void banner() {
         " |  _  | |_| |  _ <| |_| |___) |\n"
         " |_| |_|\\___/|_| \\_\\\\___/|____/\n";
     std::cout << ansi::cyan(art);
-    std::cout << ansi::grey("  \xF0\x9F\x94\xB1 the all-seeing eye  -  IOC enrichment & PE static analysis\n\n");
+    std::cout << ansi::grey("  \xF0\x9F\x94\xB1 the all-seeing eye  v2  -  PE analysis + UEBA behavioral profiling\n\n");
 }
 
 inline std::string rule(char c = '-', int width = 64) {

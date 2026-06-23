@@ -1,23 +1,30 @@
-﻿// ---------------------------------------------------------------------------
-//  main.cpp  -  ARGUS command line
+// ---------------------------------------------------------------------------
+//  main.cpp  -  HORUS v2  command line
 //
-//  Two jobs, picked automatically from the argument:
+//  Two modes:
 //
-//    * a path to a file on disk  -> hash it, and if it's a PE, tear it apart:
-//      headers, sections + entropy, imports grouped into capabilities, imphash,
-//      a risk verdict, and any URLs/IPs hiding in its strings (which can then be
-//      enriched too). Any file - PE or not - can be checked against VirusTotal
-//      by its SHA-256.
+//    * file on disk  -> hash it; if it's a PE, tear it apart: headers,
+//      sections + entropy, imports grouped by capability, imphash, UEBA
+//      behavioral profile, and any URLs/IPs in its strings.
+//      VirusTotal reputation is added when VT_API_KEY is set.
 //
-//    * anything else             -> work out what kind of indicator it is and
-//      fan it out across the configured intel sources in parallel.
+//    * anything else -> classify the indicator type and fan it out across
+//      configured intel sources in parallel.
 //
-//  API keys come from --vt-key / --abuse-key or the VT_API_KEY / ABUSEIPDB_API_KEY
-//  environment variables. Without a key the relevant source just sits out.
+//  v2 additions:
+//    - UEBA behavioral profiling (archetype matching + risk modifier)
+//    - Software hint detection from embedded strings
+//    - Authenticode directory presence check
+//    - Fixed scoring: UPX no longer double-penalized, VirtualProtect backed
+//      out of the score when it's explained by UPX unpacking
+//    - ScreenCapture weight reduced; ScreenCapture+Net combo added
+//
+//  API keys: --vt-key / --abuse-key or VT_API_KEY / ABUSEIPDB_API_KEY env vars
 // ---------------------------------------------------------------------------
 #include "ioc.hpp"
 #include "pe.hpp"
 #include "signatures.hpp"
+#include "ueba.hpp"
 #include "crypto.hpp"
 #include "intel.hpp"
 #include "console.hpp"
@@ -37,10 +44,11 @@ struct Options {
     std::string target;
     std::string vt_key;
     std::string abuse_key;
-    bool        json   = false;
-    bool        strings = false;
-    bool        no_color = false;
-    bool        help   = false;
+    bool json     = false;
+    bool strings  = false;
+    bool no_color = false;
+    bool help     = false;
+    bool profile  = false;   // verbose UEBA explanation
 };
 
 std::string get_env(const char* name) {
@@ -68,7 +76,6 @@ bool file_exists(const std::string& path) {
     return f.good();
 }
 
-// A compact 0-8 entropy gauge: [#########.........]
 std::string entropy_bar(double h) {
     int filled = (int)((h / 8.0) * 18.0 + 0.5);
     if (filled < 0)  filled = 0;
@@ -97,11 +104,11 @@ std::string json_escape(const std::string& s) {
     return o;
 }
 
-// ---- pull URLs / IPv4s out of a blob of extracted strings ----
+// ---- pull URLs / IPv4s / suspicious tokens from extracted strings ----------
 struct EmbeddedIocs {
     std::set<std::string> urls;
     std::set<std::string> ips;
-    std::set<std::string> interesting;   // suspicious tokens worth eyeballing
+    std::set<std::string> interesting;
 };
 
 EmbeddedIocs scan_strings(const std::vector<std::string>& strs) {
@@ -113,19 +120,17 @@ EmbeddedIocs scan_strings(const std::vector<std::string>& strs) {
     };
 
     for (const auto& s : strs) {
-        // URLs: scan for a scheme and read to the first whitespace/quote.
         for (const char* scheme : {"http://", "https://"}) {
             size_t pos = 0;
             while ((pos = s.find(scheme, pos)) != std::string::npos) {
                 size_t end = pos;
-                while (end < s.size() && s[end] > 0x20 && s[end] != '"' && s[end] != '\'' &&
-                       s[end] != '<' && s[end] != '>')
+                while (end < s.size() && s[end] > 0x20 && s[end] != '"' &&
+                       s[end] != '\'' && s[end] != '<' && s[end] != '>')
                     ++end;
                 found.urls.insert(s.substr(pos, end - pos));
                 pos = end;
             }
         }
-        // IPv4: slide a window of dotted-quad candidates past every digit run.
         for (size_t i = 0; i < s.size(); ++i) {
             if (!std::isdigit((unsigned char)s[i])) continue;
             if (i > 0 && (std::isdigit((unsigned char)s[i-1]) || s[i-1] == '.')) continue;
@@ -135,11 +140,59 @@ EmbeddedIocs scan_strings(const std::vector<std::string>& strs) {
             if (horus::classify(cand) == horus::IocType::IPv4) found.ips.insert(cand);
             i = j;
         }
-        // Interesting tokens
         for (const char* w : watch)
             if (s.find(w) != std::string::npos) { found.interesting.insert(w); break; }
     }
     return found;
+}
+
+// Detect likely product/company hints from strings --------------------------
+struct SoftwareHints {
+    std::vector<std::string> matched_keywords;
+    bool looks_like_automation = false;
+    bool looks_like_installer  = false;
+    bool looks_like_security   = false;
+};
+
+SoftwareHints detect_hints(const std::vector<std::string>& strs) {
+    SoftwareHints h;
+    static const char* auto_kw[] = {
+        "AutoHotkey", "AutoIt", "AHK", "macro", "hotkey", "SendKeys", nullptr
+    };
+    static const char* inst_kw[] = {
+        "Setup", "Installer", "Uninstall", "NSIS", "Inno Setup",
+        "Install Wizard", "Bootstrapper", "Redistributable", nullptr
+    };
+    static const char* sec_kw[] = {
+        "VirusTotal", "Malware", "Sandbox", "AntiVirus", "Detection", nullptr
+    };
+
+    auto scan = [&](const char** kws, bool& flag) {
+        for (int i = 0; kws[i]; ++i) {
+            std::string kw = kws[i];
+            std::string kl = kw;
+            std::transform(kl.begin(), kl.end(), kl.begin(),
+                           [](unsigned char c){ return (char)std::tolower(c); });
+            for (const auto& s : strs) {
+                std::string sl = s;
+                std::transform(sl.begin(), sl.end(), sl.begin(),
+                               [](unsigned char c){ return (char)std::tolower(c); });
+                if (sl.find(kl) != std::string::npos) {
+                    flag = true;
+                    // add the human-readable keyword once
+                    bool already = false;
+                    for (auto& m : h.matched_keywords) if (m == kw) { already = true; break; }
+                    if (!already) h.matched_keywords.push_back(kw);
+                    break;
+                }
+            }
+        }
+    };
+
+    scan(auto_kw, h.looks_like_automation);
+    scan(inst_kw, h.looks_like_installer);
+    scan(sec_kw,  h.looks_like_security);
+    return h;
 }
 
 std::vector<std::shared_ptr<horus::intel::IntelSource>> build_sources(const Options& o) {
@@ -155,25 +208,23 @@ void print_source_result(const horus::intel::SourceResult& r) {
         std::cout << "  " << ansi::bold(r.source) << "  " << ansi::grey("- " + r.error) << "\n";
         return;
     }
-    std::string head = r.source + "  ";
-    if (!r.found) { std::cout << "  " << ansi::bold(r.source) << "  " << ansi::green("clean / unknown") << "\n"; }
-    else {
+    if (!r.found) {
+        std::cout << "  " << ansi::bold(r.source) << "  " << ansi::green("clean / unknown") << "\n";
+    } else {
         std::string sev;
-        if (r.malicious >= 0)      sev = (r.malicious > 0 ? ansi::red(r.summary) : ansi::green(r.summary));
-        else if (r.score >= 0)     sev = (r.score >= 50 ? ansi::red(r.summary) :
-                                          r.score >= 25 ? ansi::yellow(r.summary) : ansi::green(r.summary));
-        else                       sev = r.summary;
+        if (r.malicious >= 0)  sev = (r.malicious > 0 ? ansi::red(r.summary) : ansi::green(r.summary));
+        else if (r.score >= 0) sev = (r.score >= 50 ? ansi::red(r.summary) :
+                                      r.score >= 25 ? ansi::yellow(r.summary) : ansi::green(r.summary));
+        else                   sev = r.summary;
         std::cout << "  " << ansi::bold(r.source) << "  " << sev << "\n";
         for (auto& kvp : r.details)
             std::cout << "      " << ansi::grey(kvp.first + ": ") << kvp.second << "\n";
     }
 }
 
-// Map VT detections to the same 0-100 / verdict scale the static engine uses,
-// so a file's static verdict and its VT consensus can be merged sensibly.
 int vt_score_from(int malicious) {
     if (malicious <= 0) return 0;
-    int s = 35 + malicious * 4;        // a single detection already means "look"
+    int s = 35 + malicious * 4;
     return s > 100 ? 100 : s;
 }
 
@@ -204,10 +255,20 @@ int analyze_file(const Options& opts) {
     if (info.valid && !info.imphash_string.empty())
         imphash = crypto::md5_hex(info.imphash_string);
 
+    // Extract strings early - needed for both UEBA and IOC pivot
+    auto strs = analyzer.extract_strings(5);
+
     sig::ScoreResult risk;
     if (info.valid) risk = sig::score(info);
 
-    // Optional VT reputation on the file's SHA-256.
+    // UEBA behavioral profile
+    bool has_upx = info.valid && risk.has_upx;
+    ueba::Profile behavior = ueba::profile(info, risk, strs, has_upx);
+
+    // Software hint detection
+    SoftwareHints hints = detect_hints(strs);
+
+    // Optional VT check
     intel::SourceResult vt;
     auto sources = build_sources(opts);
     if (!opts.vt_key.empty() && !hashes.sha256.empty()) {
@@ -215,7 +276,12 @@ int analyze_file(const Options& opts) {
         vt = vtsrc.lookup(hashes.sha256, IocType::SHA256);
     }
 
-    int static_score = info.valid ? risk.score : 0;
+    int base_score   = info.valid ? risk.score : 0;
+    // Apply UEBA modifier to static score, clamped 0-100
+    int static_score = base_score + behavior.modifier;
+    if (static_score < 0)   static_score = 0;
+    if (static_score > 100) static_score = 100;
+
     int vt_score     = (vt.ok && vt.found) ? vt_score_from(vt.malicious) : 0;
     int final_score  = std::max(static_score, vt_score);
 
@@ -230,6 +296,11 @@ int analyze_file(const Options& opts) {
         if (info.valid) {
             std::cout << "  \"bitness\": " << (info.is_64bit ? 64 : 32) << ",\n";
             std::cout << "  \"imphash\": \"" << imphash << "\",\n";
+            std::cout << "  \"has_authenticode\": " << (info.has_authenticode ? "true" : "false") << ",\n";
+            std::cout << "  \"has_upx\": " << (has_upx ? "true" : "false") << ",\n";
+            std::cout << "  \"base_score\": " << base_score << ",\n";
+            std::cout << "  \"ueba_archetype\": \"" << ueba::archetype_label(behavior.type) << "\",\n";
+            std::cout << "  \"ueba_modifier\": " << behavior.modifier << ",\n";
             std::cout << "  \"static_score\": " << static_score << ",\n";
         }
         if (vt.ok && vt.found)
@@ -241,25 +312,29 @@ int analyze_file(const Options& opts) {
     }
 
     using namespace horus::ui;
+
     section("FILE");
-    kv("path", opts.target);
-    kv("size", std::to_string(bytes.size()) + " bytes");
-    kv("MD5", hashes.md5);
-    kv("SHA-1", hashes.sha1);
+    kv("path",    opts.target);
+    kv("size",    std::to_string(bytes.size()) + " bytes");
+    kv("MD5",     hashes.md5);
+    kv("SHA-1",   hashes.sha1);
     kv("SHA-256", hashes.sha256);
 
     if (!info.valid) {
         std::cout << "\n  " << ansi::grey("Not a PE file (" + info.error + ") - hashing only.") << "\n";
     } else {
         section("PE HEADER");
-        kv("type", info.is_dll ? "DLL" : "executable");
-        kv("bitness", info.is_64bit ? "64-bit (PE32+)" : "32-bit (PE32)");
-        kv("machine", info.machine_name);
+        kv("type",      info.is_dll ? "DLL" : "executable");
+        kv("bitness",   info.is_64bit ? "64-bit (PE32+)" : "32-bit (PE32)");
+        kv("machine",   info.machine_name);
         kv("subsystem", info.subsystem_name);
-        kv("compiled", info.compile_time + (info.timestamp_suspicious ? ansi::yellow("  (suspicious)") : ""));
-        kv("image base", [&]{ char b[32]; std::snprintf(b,sizeof(b),"0x%llx",(unsigned long long)info.image_base); return std::string(b); }());
+        kv("compiled",  info.compile_time + (info.timestamp_suspicious ? ansi::yellow("  (suspicious)") : ""));
+        kv("image base",[&]{ char b[32]; std::snprintf(b,sizeof(b),"0x%llx",(unsigned long long)info.image_base); return std::string(b); }());
         kv("entry RVA", [&]{ char b[32]; std::snprintf(b,sizeof(b),"0x%x",info.entry_point_rva); return std::string(b); }());
-        kv("imphash", imphash);
+        kv("imphash",   imphash);
+        kv("signed",    info.has_authenticode
+                            ? ansi::green("yes (Authenticode directory present)")
+                            : ansi::grey("no"));
 
         section("SECTIONS");
         for (const auto& s : info.sections) {
@@ -290,8 +365,9 @@ int analyze_file(const Options& opts) {
         } else {
             for (const auto& h : risk.capabilities) {
                 const auto& m = sig::meta(h.cap);
-                std::string tag = h.significant ? ansi::yellow(std::string("[") + m.label + "]")
-                                                : ansi::grey(std::string("[") + m.label + " - common]");
+                std::string tag = h.significant
+                    ? ansi::yellow(std::string("[") + m.label + "]")
+                    : ansi::grey(std::string("[") + m.label + " - common]");
                 std::cout << "  " << tag << " " << ansi::grey(m.blurb) << "\n";
                 std::string apis = "      ";
                 for (size_t i = 0; i < h.apis.size() && i < 6; ++i) apis += h.apis[i] + "  ";
@@ -305,8 +381,30 @@ int analyze_file(const Options& opts) {
                 std::cout << "  " << ansi::red("!") << " " << f.text << "\n";
         }
 
+        // ---- software hints ----
+        if (!hints.matched_keywords.empty() || info.has_authenticode) {
+            section("SOFTWARE HINTS");
+            if (!hints.matched_keywords.empty()) {
+                std::string row = "  " + ansi::cyan("keywords ");
+                for (auto& k : hints.matched_keywords) row += k + "  ";
+                std::cout << row << "\n";
+            }
+            if (hints.looks_like_automation)
+                std::cout << "  " << ansi::cyan("type     ") << "automation / scripting tool\n";
+            else if (hints.looks_like_installer)
+                std::cout << "  " << ansi::cyan("type     ") << "software installer\n";
+            else if (hints.looks_like_security)
+                std::cout << "  " << ansi::cyan("type     ") << "security / analysis tool\n";
+            std::cout << "  " << ansi::cyan("signed   ")
+                      << (info.has_authenticode
+                              ? ansi::green("yes (Authenticode directory present)")
+                              : ansi::grey("no")) << "\n";
+            if (has_upx)
+                std::cout << "  " << ansi::cyan("packer   ")
+                          << ansi::grey("UPX (legitimate open-source packer)") << "\n";
+        }
+
         // ---- embedded IOC pivot ----
-        auto strs = analyzer.extract_strings(5);
         EmbeddedIocs emb = scan_strings(strs);
         if (!emb.urls.empty() || !emb.ips.empty() || !emb.interesting.empty()) {
             section("EMBEDDED INDICATORS  (from strings)");
@@ -317,7 +415,6 @@ int analyze_file(const Options& opts) {
                 for (auto& t : emb.interesting) row += t + "  ";
                 std::cout << row << "\n";
             }
-            // If we have an AbuseIPDB key, enrich the embedded IPs too.
             if (!opts.abuse_key.empty() && !emb.ips.empty()) {
                 std::cout << "\n  " << ansi::grey("enriching embedded IPs...") << "\n";
                 for (auto& ip : emb.ips) {
@@ -333,6 +430,52 @@ int analyze_file(const Options& opts) {
             for (size_t i = 0; i < strs.size() && i < 40; ++i)
                 std::cout << "  " << ansi::grey(strs[i]) << "\n";
         }
+
+        // ---- UEBA behavioral profile ----
+        section("BEHAVIORAL PROFILE  (UEBA)");
+        if (behavior.type == ueba::Archetype::Unknown) {
+            std::cout << "  " << ansi::grey("no strong archetype match") << "\n";
+        } else {
+            const char* arc_col = (behavior.modifier > 0) ? "\033[31;1m"    // red  = more dangerous
+                                : (behavior.modifier < 0) ? "\033[32;1m"    // green = less dangerous
+                                :                           "\033[33;1m";   // yellow = neutral
+            std::string label_str = arc_col + std::string(ueba::archetype_label(behavior.type)) + "\033[0m";
+            if (!color_enabled()) label_str = ueba::archetype_label(behavior.type);
+
+            char conf[16];
+            std::snprintf(conf, sizeof(conf), "%.0f%%", behavior.confidence * 100.f);
+            kv("archetype", label_str + ansi::grey(std::string("  (confidence ") + conf + ")"));
+            kv("reasoning", behavior.reasoning);
+
+            std::string mod_str;
+            if (behavior.modifier > 0)
+                mod_str = ansi::red("+" + std::to_string(behavior.modifier) + "  (context raises score - stronger threat signals)");
+            else if (behavior.modifier < 0)
+                mod_str = ansi::green(std::to_string(behavior.modifier) + "  (context reduces score - benign pattern)");
+            else
+                mod_str = ansi::grey("0  (neutral - insufficient context to adjust)");
+            kv("modifier", mod_str);
+
+            if (opts.profile) {
+                // verbose breakdown of which signals fired
+                std::cout << "\n  " << ansi::grey("-- capability signals used for profiling --") << "\n";
+                auto show_cap = [&](const char* name, bool present) {
+                    std::cout << "  " << ansi::grey(std::string("  ") + name + ":  ")
+                              << (present ? ansi::yellow("yes") : ansi::grey("no")) << "\n";
+                };
+                show_cap("process injection", ueba::has_sig_cap(risk, sig::Capability::ProcessInjection));
+                show_cap("input capture",     ueba::has_sig_cap(risk, sig::Capability::InputCapture));
+                show_cap("networking",         ueba::has_cap(risk, sig::Capability::Networking));
+                show_cap("screen capture",     ueba::has_cap(risk, sig::Capability::ScreenCapture));
+                show_cap("cryptography",       ueba::has_cap(risk, sig::Capability::Cryptography));
+                show_cap("reconnaissance",     ueba::has_cap(risk, sig::Capability::Reconnaissance));
+                show_cap("anti-debug",         ueba::has_cap(risk, sig::Capability::AntiDebug));
+                show_cap("UPX packing",        has_upx);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%zu", info.total_imports);
+                std::cout << "  " << ansi::grey("  import count:  ") << buf << "\n";
+            }
+        }
     }
 
     // ---- VT file reputation ----
@@ -347,13 +490,21 @@ int analyze_file(const Options& opts) {
     section("VERDICT");
     std::cout << "  " << verdict_badge(verdict_for_score(final_score), final_score)
               << "   risk " << colour_score(final_score) << "\n";
-    if (info.valid)
-        std::cout << "  " << ansi::grey("static analysis: " + std::string(sig::verdict_name(risk.verdict)) +
-                                        " (" + std::to_string(static_score) + ")") << "\n";
-    if (vt.ok && vt.found)
-        std::cout << "  " << ansi::grey("virustotal: " + vt.summary) << "\n";
-    std::cout << "\n";
 
+    if (info.valid) {
+        std::string base_line = "base score (static): " + std::to_string(base_score);
+        if (behavior.modifier != 0) {
+            std::string adj = (behavior.modifier > 0 ? "+" : "") + std::to_string(behavior.modifier);
+            base_line += "  UEBA " + adj + "  ->  adjusted: " + std::to_string(static_score);
+        }
+        std::cout << "  " << ansi::grey(base_line) << "\n";
+        if (vt.ok && vt.found)
+            std::cout << "  " << ansi::grey("virustotal: " + vt.summary) << "\n";
+        if (has_upx && final_score < 60)
+            std::cout << "  " << ansi::grey("note: UPX packing is common in legitimate open-source software") << "\n";
+    }
+
+    std::cout << "\n";
     return final_score >= 30 ? 1 : 0;
 }
 
@@ -400,7 +551,7 @@ int enrich_ioc(const Options& opts) {
     using namespace horus::ui;
     section("INDICATOR");
     kv("value", opts.target);
-    kv("type", ioc_type_name(type));
+    kv("type",  ioc_type_name(type));
 
     section("INTEL");
     if (results.empty())
@@ -416,21 +567,23 @@ int enrich_ioc(const Options& opts) {
 
 void usage() {
     std::cout <<
-    "HORUS - IOC enrichment & PE static analysis\n\n"
+    "HORUS v2 - PE analysis + UEBA behavioral profiling\n\n"
     "usage: horus <indicator-or-file> [options]\n\n"
-    "  <indicator-or-file>   a hash / IP / domain / URL / email, OR a path to a file\n\n"
+    "  <indicator-or-file>   a hash / IP / domain / URL / email, OR a file path\n\n"
     "options:\n"
     "  --vt-key <key>        VirusTotal API key   (or env VT_API_KEY)\n"
     "  --abuse-key <key>     AbuseIPDB API key     (or env ABUSEIPDB_API_KEY)\n"
-    "  --strings             dump extracted strings when analysing a file\n"
-    "  --json                machine-readable output\n"
+    "  --strings             dump extracted strings\n"
+    "  --profile             verbose UEBA signal breakdown\n"
+    "  --json                machine-readable JSON output\n"
     "  --no-color            disable ANSI colour\n"
     "  -h, --help            this help\n\n"
     "examples:\n"
     "  horus suspicious.exe\n"
+    "  horus suspicious.exe --profile\n"
     "  horus 44d88612fea8a8f36de82e1278abb02f\n"
     "  horus 185.220.101.5 --abuse-key $env:ABUSEIPDB_API_KEY\n"
-    "  horus https://sketchy.example/payload.bin --json\n";
+    "  horus malware.exe --vt-key $env:VT_API_KEY --json\n";
 }
 
 Options parse_args(int argc, char** argv) {
@@ -447,6 +600,7 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--json")              o.json = true;
         else if (a == "--strings")           o.strings = true;
         else if (a == "--no-color")          o.no_color = true;
+        else if (a == "--profile")           o.profile = true;
         else if (a == "--vt-key")            o.vt_key = next("--vt-key");
         else if (a == "--abuse-key")         o.abuse_key = next("--abuse-key");
         else if (!a.empty() && a[0] == '-')  { std::cerr << "unknown option: " << a << "\n"; std::exit(2); }
@@ -471,7 +625,6 @@ int main(int argc, char** argv) {
 
     if (!opts.json) horus::ui::banner();
 
-    // The single decision that splits the whole program: is the argument a file?
     if (file_exists(opts.target))
         return analyze_file(opts);
     return enrich_ioc(opts);

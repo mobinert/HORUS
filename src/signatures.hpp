@@ -71,7 +71,7 @@ inline const CapabilityMeta& meta(Capability c) {
         { Capability::Networking,         {"Network Activity",       8, "opens sockets or fetches remote content (C2 / download)"} },
         { Capability::Cryptography,       {"Cryptography",           8, "encrypts data - benign, or ransomware/payload packing"} },
         { Capability::InputCapture,       {"Input Capture",         20, "reads keystrokes or installs input hooks (keylogger)"} },
-        { Capability::ScreenCapture,      {"Screen Capture",        12, "grabs the screen or window contents"} },
+        { Capability::ScreenCapture,      {"Screen Capture",         6, "grabs the screen or window contents"} },
         { Capability::TokenPrivilege,     {"Privilege / Token",     14, "adjusts privileges or steals/impersonates tokens"} },
         { Capability::ServiceControl,     {"Service Control",        8, "creates or controls Windows services"} },
         { Capability::Reconnaissance,     {"Host Reconnaissance",    4, "enumerates host, user, or domain details"} },
@@ -245,6 +245,16 @@ inline bool is_common_api(const std::string& normalized) {
 
 // Known packer / protector section names. Encoded to avoid AV hits on the
 // tool binary itself (Themida, VMProtect strings trigger some signatures).
+// UPX is a legitimate open-source packer widely used by clean software.
+// Distinguish it from commercial obfuscators (Themida, VMProtect, etc.) so
+// the scoring engine can apply proportionate weight.
+inline bool is_upx_section(const std::string& name) {
+    std::string n = name;
+    std::transform(n.begin(), n.end(), n.begin(),
+                   [](unsigned char c){ return (char)std::tolower(c); });
+    return n == "upx0" || n == "upx1" || n == "upx2";
+}
+
 inline bool is_packer_section(const std::string& name) {
     static const std::unordered_set<std::string> known = {
         dx({0x2f,0x2a,0x22,0x6a}),                                     // upx0
@@ -301,6 +311,7 @@ struct ScoreResult {
     Verdict                    verdict = Verdict::Clean;
     std::vector<CapabilityHit> capabilities;
     std::vector<Finding>       findings;
+    bool                       has_upx = false;  // UPX packer sections detected
 };
 
 inline std::string normalize_api(const std::string& fn) {
@@ -335,6 +346,8 @@ inline ScoreResult score(const pe::Info& info) {
     }
 
     auto has = [&](Capability c){ return hits.count(c) > 0; };
+
+    // --- capability combos ---
     if (has(Capability::ProcessInjection) && has(Capability::DynamicResolution)) {
         r.findings.push_back({"Injection primitives paired with runtime API resolution", 15});
         r.score += 15;
@@ -347,31 +360,91 @@ inline ScoreResult score(const pe::Info& info) {
         r.findings.push_back({"Input capture combined with network I/O (keylogger pattern)", 15});
         r.score += 15;
     }
+    // Screen capture + network is only a strong signal when not purely a GUI app
+    if (has(Capability::ScreenCapture) && has(Capability::Networking)) {
+        r.findings.push_back({"Screen capture combined with network I/O (possible spyware)", 10});
+        r.score += 10;
+    }
 
-    int high_entropy = 0, budget = 24;
+    // --- section analysis (v2: no double-counting for known packers) ---
+    // Old code penalised UPX sections twice: once for RWX (+18) and once for the
+    // known packer name (+16), stacking 34 pts per section. Two UPX sections alone
+    // reached 68 pts before any import was checked, pushing legitimate installers
+    // to 100/100. The fix: when a section already has a known packer name, the RWX
+    // is expected behaviour - only one penalty applies, and UPX (open-source,
+    // widely used by clean software) gets a lower weight than commercial protectors.
+    bool detected_upx = false;
+    int entropy_budget = 24;
+
     for (const auto& s : info.sections) {
-        if (s.entropy >= 7.2 && s.raw_size > 0) {
-            ++high_entropy;
-            int add = std::min(12, budget); budget -= add;
-            if (add > 0) {
-                r.findings.push_back({"High-entropy section '" + s.name +
-                                      "' (H=" + fmt1(s.entropy) + ") - likely packed/encrypted", add});
-                r.score += add;
+        bool rwx    = s.is_rwx();
+        bool packer = is_packer_section(s.name);
+        bool upx    = is_upx_section(s.name);
+        bool hient  = (s.entropy >= 7.2 && s.raw_size > 0);
+
+        if (upx) detected_upx = true;
+
+        if (packer && rwx) {
+            // Packer section: RWX is by design, don't stack two separate penalties.
+            // UPX is an open-source tool used by countless legitimate apps; give it
+            // significantly less weight than Themida / VMProtect / ASPack etc.
+            int pen = upx ? 8 : 20;
+            r.findings.push_back({std::string(upx ? "UPX" : "Packer") +
+                                   " section '" + s.name + "' (packed+RWX)", pen});
+            r.score += pen;
+            if (hient) {
+                int add = std::min(6, entropy_budget); entropy_budget -= add;
+                if (add > 0) {
+                    r.findings.push_back({"Compressed payload in '" + s.name +
+                                          "' (H=" + fmt1(s.entropy) + ")", add});
+                    r.score += add;
+                }
             }
-        }
-        if (s.is_rwx()) {
-            r.findings.push_back({"Section '" + s.name + "' is writable AND executable (RWX)", 18});
-            r.score += 18;
-        }
-        if (is_packer_section(s.name)) {
-            r.findings.push_back({"Known packer section name '" + s.name + "'", 16});
-            r.score += 16;
+        } else {
+            // Unexpected RWX or unnamed-but-suspicious packer
+            if (rwx) {
+                r.findings.push_back({"Section '" + s.name + "' is writable AND executable (RWX)", 20});
+                r.score += 20;
+            }
+            if (packer) {
+                r.findings.push_back({"Known packer section name '" + s.name + "'", 16});
+                r.score += 16;
+            }
+            if (hient) {
+                int add = std::min(12, entropy_budget); entropy_budget -= add;
+                if (add > 0) {
+                    r.findings.push_back({"High-entropy section '" + s.name +
+                                          "' (H=" + fmt1(s.entropy) + ") - packed/encrypted", add});
+                    r.score += add;
+                }
+            }
         }
     }
 
-    if (info.total_imports > 0 && info.total_imports < 8 && high_entropy > 0) {
-        r.findings.push_back({"Very small import table on a packed binary (imports likely resolved at runtime)", 12});
-        r.score += 12;
+    r.has_upx = detected_upx;
+
+    // VirtualProtect is always called by UPX's own unpack stub - it's not a
+    // separate threat indicator when UPX explains the packing. Back it out
+    // unless there's also process injection (which genuinely needs it).
+    if (detected_upx && has(Capability::MemoryExecution) && !has(Capability::ProcessInjection)) {
+        r.score -= meta(Capability::MemoryExecution).weight;
+        for (auto& cap : r.capabilities)
+            if (cap.cap == Capability::MemoryExecution) { cap.significant = false; break; }
+    }
+
+    // Essentially no visible imports + packing = strong "loader / unpacker stub" signal
+    int high_ent_secs = 0;
+    for (const auto& s : info.sections)
+        if (s.entropy >= 7.2 && s.raw_size > 0) ++high_ent_secs;
+
+    if (high_ent_secs > 0) {
+        if (info.total_imports > 0 && info.total_imports < 4) {
+            r.findings.push_back({"Minimal static imports on packed binary (APIs likely runtime-resolved)", 16});
+            r.score += 16;
+        } else if (info.total_imports >= 4 && info.total_imports < 8) {
+            r.findings.push_back({"Very small import table on packed binary (imports likely runtime-resolved)", 8});
+            r.score += 8;
+        }
     }
 
     if (info.timestamp_suspicious) {
@@ -394,6 +467,7 @@ inline ScoreResult score(const pe::Info& info) {
         }
     }
 
+    if (r.score < 0)   r.score = 0;
     if (r.score > 100) r.score = 100;
     if      (r.score >= 60) r.verdict = Verdict::Malicious;
     else if (r.score >= 30) r.verdict = Verdict::Suspicious;

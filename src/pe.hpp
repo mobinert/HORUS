@@ -96,6 +96,10 @@ struct Info {
     std::string imphash_string;           // canonical pre-hash string
     double      overall_entropy = 0.0;
     size_t      total_imports = 0;
+
+    uint32_t    rsrc_rva  = 0;            // resource section RVA (0 if absent)
+    uint32_t    rsrc_size = 0;
+    bool        has_authenticode = false; // DataDirectory[4] size > 0
 };
 
 // ---------------------------------------------------------------------------
@@ -190,6 +194,15 @@ public:
             parse_imports(info, imp_rva);          // best-effort; never fatal
 
         build_imphash_string(info);
+
+        // ---- resource directory (DataDirectory[2]) ----
+        rd32(dir_base + 8 * 2,     info.rsrc_rva);
+        rd32(dir_base + 8 * 2 + 4, info.rsrc_size);
+
+        // ---- Authenticode (DataDirectory[4]) - just presence, not validation ----
+        uint32_t auth_sz = 0;
+        rd32(dir_base + 8 * 4 + 4, auth_sz);
+        info.has_authenticode = (auth_sz > 0);
 
         info.valid = true;
         return info;
