@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HORUS — IOC enrichment &amp; PE static analysis for Windows</title>
+<meta name="description" content="A single self-contained Windows CLI: hand it a file, hash, IP, domain, URL or email and get a verdict. PE static analysis + VirusTotal/AbuseIPDB enrichment. Zero dependencies.">
+<meta property="og:title" content="HORUS — the all-seeing eye">
+<meta property="og:description" content="Drop it anywhere. Point it at anything. Get a verdict. Windows malware triage in one zero-dependency .exe.">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --bg:#0a0e14;--panel:#111823;--panel2:#0c121b;--line:#1c2635;--line2:#26344a;
+    --txt:#e6edf3;--mut:#9aa7b8;--dim:#5f6e82;
+    --cyan:#00e5ff;--green:#00ff88;--teal:#00bcd4;
+    --clean:#22c55e;--low:#38bdf8;--susp:#f59e0b;--mal:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;color:var(--txt);background:var(--bg);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background-image:
+      radial-gradient(1000px 560px at 82% -10%,rgba(0,229,255,.13),transparent 60%),
+      radial-gradient(820px 520px at 4% -2%,rgba(0,255,136,.09),transparent 55%);
+    background-attachment:fixed;-webkit-font-smoothing:antialiased}
+  a{color:var(--cyan);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+    background:rgba(10,14,20,.72);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.06em;font-family:ui-monospace,monospace}
+  .logo .eye{font-size:20px;filter:drop-shadow(0 0 8px rgba(0,229,255,.7))}
+  .logo .mk{background:linear-gradient(90deg,var(--cyan),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .navlinks{display:flex;gap:22px;align-items:center;font-size:14px;color:var(--mut)}
+  .navlinks a{color:var(--mut)}
+  .navlinks a:hover{color:var(--txt);text-decoration:none}
+  .ghbtn{border:1px solid var(--line2);border-radius:9px;padding:7px 13px;color:var(--txt)!important;background:var(--panel)}
+  .ghbtn:hover{border-color:var(--cyan);text-decoration:none}
+  @media(max-width:660px){.navlinks a.hideSm{display:none}}
+
+  .hero{padding:52px 0 36px}
+  .heroBanner{width:100%;border-radius:16px;overflow:hidden;border:1px solid var(--line2);
+    box-shadow:0 30px 80px -40px rgba(0,229,255,.35);display:block}
+  .heroBanner img{width:100%;display:block}
+  .heroGrid{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;margin-top:38px}
+  @media(max-width:880px){.heroGrid{grid-template-columns:1fr;gap:26px}}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--cyan);font-weight:700;
+    border:1px solid var(--line2);border-radius:999px;padding:6px 13px;background:var(--panel)}
+  h1{font-size:40px;line-height:1.1;margin:18px 0 12px;letter-spacing:-.02em}
+  @media(max-width:880px){h1{font-size:31px}}
+  h1 .g{background:linear-gradient(90deg,var(--cyan),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{color:var(--mut);font-size:18px;max-width:40ch}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:15px;border-radius:11px;padding:12px 20px;border:1px solid transparent}
+  .btn.primary{color:#04140c;background:linear-gradient(90deg,var(--green),var(--cyan));box-shadow:0 10px 30px -12px rgba(0,255,136,.6)}
+  .btn.primary:hover{text-decoration:none;filter:brightness(1.06)}
+  .btn.ghost{color:var(--txt);border-color:var(--line2);background:var(--panel)}
+  .btn.ghost:hover{text-decoration:none;border-color:var(--cyan)}
+  .badges{display:flex;flex-wrap:wrap;gap:9px;margin-top:22px}
+  .badge{font-size:12px;font-weight:600;color:var(--mut);border:1px solid var(--line);
+    background:var(--panel);border-radius:8px;padding:5px 11px;display:inline-flex;gap:7px;align-items:center}
+  .badge b{color:var(--txt);font-weight:700}
+  .dotc{width:8px;height:8px;border-radius:50%}
+
+  .term{border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,#0c131d,#080c12);
+    box-shadow:0 30px 70px -30px rgba(0,0,0,.85);overflow:hidden}
+  .term .bar{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);background:#0b1119}
+  .term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .term .bar .t{margin-left:10px;color:var(--dim);font-size:12px;font-family:ui-monospace,monospace}
+  .term pre{margin:0;padding:15px 16px 17px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.55;color:#c4d0dd;overflow-x:auto}
+  .c-dim{color:var(--dim)} .c-cyan{color:var(--cyan)} .c-green{color:var(--green)}
+  .c-hit{color:var(--susp)} .c-mal{color:var(--mal);font-weight:700}
+  .tagline{color:var(--green)}
+
+  section{padding:52px 0;border-top:1px solid var(--line)}
+  .kicker{color:var(--cyan);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12.5px}
+  h2{font-size:29px;margin:10px 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--mut);max-width:62ch;margin:0}
+
+  .inputs{margin-top:26px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel)}
+  .inputs .row{display:grid;grid-template-columns:200px 1fr;gap:0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .inputs .row:last-child{border-bottom:0}
+  .inputs .k{padding:13px 18px;font-family:ui-monospace,monospace;color:var(--cyan);font-size:13.5px;border-right:1px solid var(--line);background:var(--panel2)}
+  .inputs .v{padding:13px 18px;color:var(--mut);font-size:14px}
+  @media(max-width:600px){.inputs .row{grid-template-columns:1fr}.inputs .k{border-right:0;border-bottom:1px solid var(--line)}}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:30px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .feat{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:20px}
+  .feat:hover{border-color:var(--line2)}
+  .feat .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:19px;
+    background:rgba(0,229,255,.10);border:1px solid rgba(0,229,255,.28);margin-bottom:13px}
+  .feat h3{margin:0 0 6px;font-size:16px}
+  .feat p{margin:0;color:var(--mut);font-size:14px}
+
+  .scorecols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:26px}
+  @media(max-width:760px){.scorecols{grid-template-columns:1fr}}
+  .scard{border:1px solid var(--line);background:var(--panel);border-radius:14px;overflow:hidden}
+  .scard h3{margin:0;padding:14px 18px;font-size:14.5px;background:var(--panel2);border-bottom:1px solid var(--line)}
+  .scard .r{display:flex;justify-content:space-between;gap:14px;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.03);font-size:13.5px}
+  .scard .r:last-child{border-bottom:0}
+  .scard .r span{color:var(--mut)} .scard .r b{color:var(--cyan);font-family:ui-monospace,monospace;flex:0 0 auto}
+  .scard .r.bonus b{color:var(--green)}
+
+  .bands{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:22px}
+  @media(max-width:700px){.bands{grid-template-columns:1fr 1fr}}
+  .band{border:1px solid var(--line);border-radius:12px;padding:15px 16px;background:var(--panel);border-top-width:3px}
+  .band .n{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim)}
+  .band .l{font-weight:800;margin:5px 0 3px;font-size:15px}
+  .band p{margin:0;color:var(--mut);font-size:13px}
+  .band.clean{border-top-color:var(--clean)} .band.clean .l{color:var(--clean)}
+  .band.low{border-top-color:var(--low)} .band.low .l{color:var(--low)}
+  .band.susp{border-top-color:var(--susp)} .band.susp .l{color:var(--susp)}
+  .band.mal{border-top-color:var(--mal)} .band.mal .l{color:var(--mal)}
+
+  .steps{counter-reset:s;margin-top:24px;display:grid;gap:12px}
+  .step{display:flex;gap:14px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:14px 18px;background:var(--panel)}
+  .step::before{counter-increment:s;content:counter(s);flex:0 0 auto;width:26px;height:26px;border-radius:50%;
+    display:grid;place-items:center;font-weight:800;font-size:13px;background:rgba(0,229,255,.14);
+    border:1px solid rgba(0,229,255,.4);color:var(--cyan)}
+  .step code{font-size:13.5px;color:#c4d0dd}
+  .step .d{color:var(--mut);font-size:13px;margin-top:2px}
+
+  .safe{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:26px}
+  @media(max-width:640px){.safe{grid-template-columns:1fr}}
+  .safe div{border:1px solid var(--line);border-radius:12px;padding:17px 19px;background:var(--panel);font-size:14px;color:var(--mut)}
+  .safe div b{color:var(--txt)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 60px;color:var(--dim);font-size:13.5px}
+  footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;align-items:center}
+  footer a{color:var(--mut)}
+  .disc{max-width:74ch;margin-top:14px;color:var(--dim);font-size:12.5px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <div class="logo"><span class="eye">𓂀</span><span class="mk">HORUS</span></div>
+  <div class="navlinks">
+    <a href="#what" class="hideSm">What</a>
+    <a href="#features" class="hideSm">Features</a>
+    <a href="#scoring" class="hideSm">Scoring</a>
+    <a href="#start">Get&nbsp;started</a>
+    <a class="ghbtn" href="https://github.com/mobinert/HORUS">GitHub ↗</a>
+  </div>
+</div></nav>
+
+<header class="wrap hero">
+  <a class="heroBanner" href="https://github.com/mobinert/HORUS"><img src="banner.svg" alt="HORUS — The All-Seeing Eye"></a>
+
+  <div class="heroGrid">
+    <div>
+      <span class="eyebrow">𓂀 the all-seeing eye · Windows · C++17</span>
+      <h1>Point it at anything. <span class="g">Get a verdict.</span></h1>
+      <p class="lede">One self-contained <code>.exe</code> for Windows malware triage — PE static analysis + live threat-intel enrichment. <b>No Python, no installers, zero dependencies.</b></p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/mobinert/HORUS/releases/latest">⬇ Download horus.exe</a>
+        <a class="btn ghost" href="#start">Quick start</a>
+      </div>
+      <div class="badges">
+        <span class="badge"><span class="dotc" style="background:#0078D7"></span><b>Windows</b> x64</span>
+        <span class="badge">C++<b>17</b></span>
+        <span class="badge"><span class="dotc" style="background:var(--green)"></span><b>Zero</b> deps</span>
+        <span class="badge">MIT <b>License</b></span>
+      </div>
+    </div>
+
+    <div class="term" aria-hidden="true">
+      <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Windows Terminal</span></div>
+<pre><span class="c-dim">&gt;</span> horus ransomware_sample.exe
+
+<span class="c-dim">FILE ─────────────────────────────────</span>
+  SHA-256   e3b0c44298fc1c14…f924852b855
+<span class="c-dim">PE HEADER ─────────────────────────────</span>
+  bitness   64-bit (PE32+)
+  compiled  2018-11-06  <span class="c-hit">(suspicious)</span>
+  imphash   9a4f2c8d1e7b3056a82c914d6e0f5b17
+<span class="c-dim">SECTIONS ──────────────────────────────</span>
+  .text   r-x  H=6.21
+  UPX0    rwx  H=7.94  <span class="c-mal">RWX!</span>
+<span class="c-dim">CAPABILITIES ──────────────────────────</span>
+  <span class="c-cyan">[Cryptography] [Network] [Persistence]</span>
+  <span class="c-hit">! Crypto + network I/O (exfil pattern)  +12</span>
+  <span class="c-hit">! RWX section 'UPX0' (packed)           +18</span>
+<span class="c-dim">EMBEDDED IOCs ─────────────────────────</span>
+  url  http://185.220.101.5:8080/gate.php
+<span class="c-dim">VIRUSTOTAL ────────────────────────────</span>
+  61/72 — Ransom.FileCryptor  <span class="c-mal">(Malicious)</span>
+<span class="c-dim">VERDICT ───────────────────────────────</span>
+  <span class="c-mal">[ LIKELY MALICIOUS ]   risk 98/100</span></pre>
+    </div>
+  </div>
+</header>
+
+<section id="what">
+  <div class="wrap">
+    <div class="kicker">What is Horus</div>
+    <h2>Hand it anything — it figures out what to do</h2>
+    <p class="sub">No flags to memorize. <code class="mono">horus &lt;thing&gt;</code> auto-detects what you gave it and runs the right analysis.</p>
+    <div class="inputs">
+      <div class="row"><div class="k">a file path</div><div class="v">Hashes it (MD5/SHA-1/SHA-256), parses the PE, scores risk, pivots on embedded indicators</div></div>
+      <div class="row"><div class="k">a hash</div><div class="v">Queries VirusTotal and reports engine detections — MD5, SHA-1 or SHA-256 auto-detected</div></div>
+      <div class="row"><div class="k">an IP address</div><div class="v">Queries VirusTotal <b>and</b> AbuseIPDB in parallel for reputation &amp; abuse reports</div></div>
+      <div class="row"><div class="k">a domain / URL</div><div class="v">Queries VirusTotal, reports category, reputation and per-engine verdicts</div></div>
+      <div class="row"><div class="k">an email</div><div class="v">Queries VirusTotal for associated reputation</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="kicker">Under the hood</div>
+    <h2>Real static analysis, not just a hash lookup</h2>
+    <div class="grid">
+      <div class="feat"><div class="ic">🧮</div><h3>Hashing</h3><p>MD5, SHA-1 and SHA-256 computed via Windows BCrypt/CNG — plus a Mandiant-compatible imphash for family pivoting.</p></div>
+      <div class="feat"><div class="ic">🧷</div><h3>PE parser</h3><p>PE32 / PE32+ headers, sections and imports — every offset and length bounds-checked, so malformed samples are safe to feed it.</p></div>
+      <div class="feat"><div class="ic">🌡️</div><h3>Entropy &amp; packing</h3><p>Per-section Shannon entropy flags packed/encrypted regions and known packers (UPX, Themida, VMProtect…).</p></div>
+      <div class="feat"><div class="ic">🧠</div><h3>Capability scoring</h3><p>~110 Windows APIs mapped to the capabilities they imply — injection, keylogging, persistence, evasion — and the dangerous <i>combinations</i>.</p></div>
+      <div class="feat"><div class="ic">🛰️</div><h3>Intel enrichment</h3><p>VirusTotal v3 + AbuseIPDB v2 over Windows WinHTTP, fanned out in parallel. Extensible <code>IntelSource</code> interface.</p></div>
+      <div class="feat"><div class="ic">🧩</div><h3>JSON + exit codes</h3><p><code>--json</code> for SIEM/automation; exit code 1 when a target is suspicious or malicious, so it drops straight into pipelines.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="scoring">
+  <div class="wrap">
+    <div class="kicker">The scoring engine</div>
+    <h2>It interprets imports — it doesn't just list them</h2>
+    <p class="sub">Common dual-use APIs (<code>LoadLibrary</code>, <code>CreateProcess</code>) are shown but don't move the score alone. Only rare primitives and dangerous combinations do.</p>
+    <div class="scorecols">
+      <div class="scard">
+        <h3>Individual capabilities</h3>
+        <div class="r"><span>Process injection</span><b>+22</b></div>
+        <div class="r"><span>Input capture (keylogger)</span><b>+20</b></div>
+        <div class="r"><span>RWX section</span><b>+18 ea</b></div>
+        <div class="r"><span>Known packer name</span><b>+16</b></div>
+        <div class="r"><span>Persistence</span><b>+14</b></div>
+        <div class="r"><span>Privilege escalation</span><b>+14</b></div>
+        <div class="r"><span>High-entropy section (≥7.2)</span><b>+12 ea</b></div>
+        <div class="r"><span>Screen capture · defense evasion</span><b>+12</b></div>
+      </div>
+      <div class="scard">
+        <h3>Combination bonuses — the important part</h3>
+        <div class="r bonus"><span>Injection + dynamic API resolution</span><b>+15</b></div>
+        <div class="r bonus"><span>Keylogger + networking</span><b>+15</b></div>
+        <div class="r bonus"><span>Crypto + networking (ransomware / C2)</span><b>+12</b></div>
+        <div class="r"><span style="color:var(--dim)">…combined with VirusTotal consensus for the final verdict</span><b style="color:var(--dim)">→</b></div>
+      </div>
+    </div>
+
+    <div class="bands">
+      <div class="band clean"><div class="n">0 – 9</div><div class="l">CLEAN</div><p>Nothing concerning found.</p></div>
+      <div class="band low"><div class="n">10 – 29</div><div class="l">LOW RISK</div><p>Suspicious imports, no strong signals.</p></div>
+      <div class="band susp"><div class="n">30 – 59</div><div class="l">SUSPICIOUS</div><p>Multiple concerning capabilities or combos.</p></div>
+      <div class="band mal"><div class="n">60 – 100</div><div class="l">LIKELY MALICIOUS</div><p>Strong evidence of malicious intent.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="kicker">Get started</div>
+    <h2>No install. Download and run.</h2>
+    <div class="steps">
+      <div class="step"><div><code>Download horus.exe from the Releases page</code><div class="d">One file. Put it on your PATH, or just run it from any folder.</div></div></div>
+      <div class="step"><div><code>.\horus.exe suspicious.exe</code><div class="d">Full static PE analysis + hashing — works with no API keys at all.</div></div></div>
+      <div class="step"><div><code>$env:VT_API_KEY = "…"  ;  $env:ABUSEIPDB_API_KEY = "…"</code><div class="d">Optional: free keys unlock live VirusTotal &amp; AbuseIPDB lookups.</div></div></div>
+      <div class="step"><div><code>horus 185.220.101.5 --json | jq .verdict</code><div class="d">Point it at a hash, IP, domain, URL or email — JSON for automation.</div></div></div>
+    </div>
+    <div class="cta" style="margin-top:22px">
+      <a class="btn primary" href="https://github.com/mobinert/HORUS/releases/latest">⬇ Download the latest release</a>
+      <a class="btn ghost" href="https://github.com/mobinert/HORUS#building-from-source">Build from source</a>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <div class="kicker">Safety &amp; limitations</div>
+    <h2>Read-only by design</h2>
+    <div class="safe">
+      <div><b>It never runs the sample.</b> Horus only reads bytes — it never executes, modifies, or generates anything.</div>
+      <div><b>Malformed samples are safe.</b> The PE parser bounds-checks every offset and length before reading.</div>
+      <div><b>A triage aid, not a final verdict.</b> Pair the static score with VirusTotal consensus and, for anything that matters, a sandbox detonation.</div>
+      <div><b>Static analysis has limits.</b> Heavily obfuscated samples that resolve imports at runtime score low — that's expected; entropy heuristics only partly compensate.</div>
+    </div>
+  </div>
+</section>
+
+<footer><div class="wrap">
+  <div>Built for defenders by <a href="https://github.com/mobinert"><b>Mobin Erteghaie</b></a> · <a href="https://github.com/mobinert/HORUS/blob/main/LICENSE">MIT License</a> · free forever</div>
+  <div><a href="https://github.com/mobinert/HORUS">⭐ Star on GitHub ↗</a></div>
+</div>
+<div class="wrap disc">Use only on systems and samples you are authorized to analyze. Horus reports indicators for human review; a high risk score is a prompt to investigate, not a production verdict. Live lookups send the indicator (hash/IP/domain/URL) to VirusTotal and AbuseIPDB — file contents are never uploaded.</div>
+</footer>
+
+</body>
+</html>
