@@ -10,6 +10,7 @@
 ![License MIT](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)
 ![Release](https://img.shields.io/github/v/release/mobinert/HORUS?style=for-the-badge&color=ff4444)
 ![Downloads](https://img.shields.io/github/downloads/mobinert/HORUS/total?style=for-the-badge&color=orange)
+[![Website](https://img.shields.io/badge/website-mobinert.github.io%2FHORUS-00e5ff?style=for-the-badge)](https://mobinert.github.io/HORUS/)
 
 <br/>
 
