@@ -437,6 +437,15 @@ The imphash follows the Mandiant recipe: lowercase `dll.function` pairs (with ex
 
 ---
 
+## More from the same workbench
+
+| Tool | What it does |
+|------|--------------|
+| [**machunt**](https://github.com/mobinert/machunt) | Read-only macOS threat hunting & compromise assessment — 20 modules, HTML/JSON reports |
+| [**ssh-fortress**](https://github.com/mobinert/ssh-fortress) | SSH hardening, brute-force protection & SIEM integration for Linux servers |
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Free for personal, commercial, and research use forever.
