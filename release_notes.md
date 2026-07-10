@@ -1,3 +1,47 @@
+## Horus v2.1.0
+
+### What's new in v2.1
+
+**Similarity / fuzzy hashing**
+- **TLSH** (Trend Micro Locality Sensitive Hash) and **ssdeep** digests, computed
+  straight off the file bytes. Both are byte-for-byte compatible with the
+  reference tools — verified against libtlsh and ssdeep on real Windows binaries.
+- TLSH turns "score one file" into "recognise the family": identical files score
+  0, a few edits stay a couple of units apart, unrelated files sit hundreds apart.
+- **authentihash** (the PE hash the Authenticode signature covers) — lets you
+  match signed-malware campaigns even when the payload bytes differ.
+- **rich hash** — MD5 of the decoded MSVC Rich header, a compiler/linker build
+  fingerprint useful for clustering and attribution.
+
+**Real Authenticode verification (not just presence)**
+- Runs the signature through `WinVerifyTrust` for both embedded and
+  **catalog-signed** files, so OS binaries are correctly reported as signed.
+- Extracts the signer's common name from the PKCS#7 (e.g. `Microsoft Windows`).
+- A file that carries a certificate but no longer verifies is scored as a
+  tamper/forgery signal instead of being trusted.
+
+**MITRE ATT&CK mapping**
+- Each significant capability (and the combos that fire) is tagged with its
+  technique ID — Injection→T1055, Input Capture→T1056.001, Networking→T1071,
+  Crypto+Net→T1486, Token→T1134, and so on — in both the report and the JSON.
+
+**More of the PE parsed**
+- Rich header decode (toolchain records), CodeView **PDB path** + GUID/age,
+  **TLS callbacks**, export table, appended **overlay** (offset/size/entropy),
+  and **.NET / CLR** image detection.
+
+**Still zero third-party dependencies** — the new verification path links only
+`wintrust` and `crypt32`, which ship with Windows.
+
+### Quick start (v2.1)
+
+```
+horus suspicious.exe                 # hashes + TLSH/ssdeep + signature + ATT&CK
+horus suspicious.exe --json          # same, machine-readable
+```
+
+---
+
 ## Horus v2.0.0
 
 ### Download

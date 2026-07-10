@@ -94,6 +94,54 @@ std::string hex_digest(LPCWSTR alg, const uint8_t* data, size_t len) {
     return d.empty() ? std::string() : to_hex(d);
 }
 
+// Same streaming hash, but over several discontiguous ranges fed in order.
+std::vector<uint8_t> digest_segments(
+    LPCWSTR alg, const std::vector<std::pair<const uint8_t*, size_t>>& segs) {
+    std::vector<uint8_t> result;
+
+    AlgProvider provider;
+    if (BCryptOpenAlgorithmProvider(&provider.h, alg, nullptr, 0) != STATUS_SUCCESS)
+        return result;
+
+    DWORD obj_len = 0, written = 0;
+    if (BCryptGetProperty(provider.h, BCRYPT_OBJECT_LENGTH,
+                          reinterpret_cast<PUCHAR>(&obj_len), sizeof(obj_len),
+                          &written, 0) != STATUS_SUCCESS)
+        return result;
+
+    DWORD hash_len = 0;
+    if (BCryptGetProperty(provider.h, BCRYPT_HASH_LENGTH,
+                          reinterpret_cast<PUCHAR>(&hash_len), sizeof(hash_len),
+                          &written, 0) != STATUS_SUCCESS)
+        return result;
+
+    std::vector<uint8_t> obj_buffer(obj_len);
+    HashObject hash;
+    if (BCryptCreateHash(provider.h, &hash.h,
+                         obj_buffer.data(), obj_len,
+                         nullptr, 0, 0) != STATUS_SUCCESS)
+        return result;
+
+    for (const auto& seg : segs) {
+        const uint8_t* data = seg.first;
+        size_t len = seg.second, offset = 0;
+        while (offset < len) {
+            ULONG chunk = static_cast<ULONG>(len - offset < HASH_CHUNK ? len - offset : HASH_CHUNK);
+            if (BCryptHashData(hash.h,
+                               const_cast<PUCHAR>(data + offset), chunk, 0) != STATUS_SUCCESS)
+                return result;
+            offset += chunk;
+        }
+    }
+
+    result.resize(hash_len);
+    if (BCryptFinishHash(hash.h, result.data(), hash_len, 0) != STATUS_SUCCESS) {
+        result.clear();
+        return result;
+    }
+    return result;
+}
+
 } // namespace
 
 std::string md5_hex(const uint8_t* data, size_t len) {
@@ -108,6 +156,11 @@ std::string sha256_hex(const uint8_t* data, size_t len) {
 
 std::string md5_hex(const std::string& text) {
     return md5_hex(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+}
+
+std::string sha256_hex_segments(const std::vector<std::pair<const uint8_t*, size_t>>& segs) {
+    auto d = digest_segments(BCRYPT_SHA256_ALGORITHM, segs);
+    return d.empty() ? std::string() : to_hex(d);
 }
 
 FileHashes hash_buffer(const std::vector<uint8_t>& data) {

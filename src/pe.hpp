@@ -100,6 +100,44 @@ struct Info {
     uint32_t    rsrc_rva  = 0;            // resource section RVA (0 if absent)
     uint32_t    rsrc_size = 0;
     bool        has_authenticode = false; // DataDirectory[4] size > 0
+
+    // ---- Rich header (MSVC build fingerprint, sits before the PE header) ----
+    struct RichEntry { uint16_t prod_id = 0; uint16_t build_id = 0; uint32_t count = 0; };
+    bool                    has_rich = false;
+    uint32_t                rich_xor_key = 0;
+    std::vector<RichEntry>  rich_entries;
+    std::vector<uint8_t>    rich_clear;       // decoded bytes, hashed elsewhere
+
+    // ---- debug directory (dir 6) -> CodeView PDB path + GUID/age ----
+    bool        has_debug = false;
+    std::string pdb_path;
+    std::string codeview_guid;
+    uint32_t    codeview_age = 0;
+
+    // ---- TLS callbacks (dir 9) ----
+    bool        has_tls = false;
+    size_t      tls_callback_count = 0;
+
+    // ---- exports (dir 0) ----
+    bool                     has_exports = false;
+    std::string              export_dll_name;
+    size_t                   export_count = 0;
+    std::vector<std::string> export_names;      // capped sample
+
+    // ---- overlay (appended data past the last mapped section) ----
+    uint64_t    overlay_offset = 0;
+    uint64_t    overlay_size   = 0;
+    double      overlay_entropy = 0.0;
+
+    // ---- managed / .NET (dir 14, COM descriptor) ----
+    bool        is_dotnet = false;
+
+    // ---- byte ranges the Authenticode hash must skip (file offsets) ----
+    size_t      ah_checksum_off = 0;    // OptionalHeader.CheckSum, 4 bytes
+    size_t      ah_secdir_off   = 0;    // DataDirectory[4] entry, 8 bytes
+    size_t      ah_cert_off     = 0;    // attribute certificate table (0 = none)
+    size_t      ah_cert_size    = 0;
+    bool        ah_ready        = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +241,35 @@ public:
         uint32_t auth_sz = 0;
         rd32(dir_base + 8 * 4 + 4, auth_sz);
         info.has_authenticode = (auth_sz > 0);
+
+        // how many data directories the file actually declares
+        uint32_t num_rva = 0;
+        rd32(dir_base - 4, num_rva);
+
+        // ---- byte ranges the Authenticode digest skips ----
+        info.ah_checksum_off = opt + 64;
+        info.ah_secdir_off   = dir_base + 8 * 4;
+        {
+            uint32_t cva = 0, csz = 0;
+            rd32(dir_base + 8 * 4,     cva);   // security dir VA == raw file offset
+            rd32(dir_base + 8 * 4 + 4, csz);
+            info.ah_cert_off  = cva;
+            info.ah_cert_size = csz;
+        }
+        info.ah_ready = true;
+
+        // ---- managed / .NET (dir 14) ----
+        if (num_rva > 14) {
+            uint32_t clr_rva = 0;
+            rd32(dir_base + 8 * 14, clr_rva);
+            info.is_dotnet = (clr_rva != 0);
+        }
+
+        parse_rich(info, e_lfanew);
+        if (num_rva > 6) parse_debug(info, dir_base);
+        if (num_rva > 9) parse_tls(info, dir_base);
+        if (num_rva > 0) parse_exports(info, dir_base);
+        compute_overlay(info);
 
         info.valid = true;
         return info;
@@ -377,6 +444,172 @@ private:
                     imp.functions.push_back(read_cstr(hn_off + 2, 256));
                 }
             }
+        }
+    }
+
+    // ---- Rich header: MSVC stamps a XOR-obfuscated build fingerprint between
+    //      the DOS stub and the PE header. Decode it - the (compiler,count)
+    //      pairs are a strong attribution / clustering signal. ----
+    void parse_rich(Info& info, uint32_t e_lfanew) {
+        if (e_lfanew < 0x80 || e_lfanew > buf_.size()) return;
+
+        size_t rich_off = 0;
+        for (size_t i = 0x80; i + 8 <= e_lfanew; i += 4) {
+            if (buf_[i]=='R' && buf_[i+1]=='i' && buf_[i+2]=='c' && buf_[i+3]=='h') {
+                rich_off = i; break;
+            }
+        }
+        if (!rich_off) return;
+
+        uint32_t key = 0;
+        if (!rd32(rich_off + 4, key)) return;
+
+        const uint32_t DANS = 0x536E6144;   // 'DanS'
+        size_t dans_off = 0;
+        for (size_t p = rich_off; p >= 0x84; ) {
+            p -= 4;
+            uint32_t v = 0;
+            if (!rd32(p, v)) break;
+            if ((v ^ key) == DANS) { dans_off = p; break; }
+        }
+        if (!dans_off) return;
+
+        info.has_rich     = true;
+        info.rich_xor_key = key;
+
+        // decoded [DanS .. Rich) bytes feed the rich hash
+        for (size_t p = dans_off; p + 4 <= rich_off; p += 4) {
+            uint32_t v = 0; rd32(p, v);
+            uint32_t d = v ^ key;
+            info.rich_clear.push_back((uint8_t)(d));
+            info.rich_clear.push_back((uint8_t)(d >> 8));
+            info.rich_clear.push_back((uint8_t)(d >> 16));
+            info.rich_clear.push_back((uint8_t)(d >> 24));
+        }
+        // (comp_id, count) pairs follow DanS + 3 padding dwords
+        for (size_t p = dans_off + 16; p + 8 <= rich_off; p += 8) {
+            uint32_t comp = 0, cnt = 0;
+            rd32(p, comp);     comp ^= key;
+            rd32(p + 4, cnt);  cnt  ^= key;
+            Info::RichEntry e;
+            e.prod_id  = (uint16_t)(comp >> 16);
+            e.build_id = (uint16_t)(comp & 0xFFFF);
+            e.count    = cnt;
+            info.rich_entries.push_back(e);
+        }
+    }
+
+    // ---- debug directory -> CodeView (RSDS) PDB path, GUID and age ----
+    void parse_debug(Info& info, size_t dir_base) {
+        uint32_t rva = 0, sz = 0;
+        rd32(dir_base + 8 * 6,     rva);
+        rd32(dir_base + 8 * 6 + 4, sz);
+        if (!rva || !sz) return;
+        size_t off;
+        if (!rva_to_offset(info, rva, off)) return;
+        info.has_debug = true;
+
+        uint32_t count = sz / 28;
+        for (uint32_t i = 0; i < count && i < 64; ++i) {
+            size_t base = off + (size_t)i * 28;
+            uint32_t type = 0, praw = 0;
+            if (!rd32(base + 12, type) || !rd32(base + 24, praw)) break;
+            if (type != 2) continue;               // IMAGE_DEBUG_TYPE_CODEVIEW
+            uint32_t sig = 0;
+            if (!rd32(praw, sig) || sig != 0x53445352) continue;   // 'RSDS'
+            if (praw + 24 > buf_.size()) continue;
+            uint32_t d1 = 0; uint16_t d2 = 0, d3 = 0;
+            rd32(praw + 4, d1); rd16(praw + 8, d2); rd16(praw + 10, d3);
+            char g[64];
+            std::snprintf(g, sizeof(g),
+                "%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                d1, d2, d3,
+                buf_[praw+12], buf_[praw+13], buf_[praw+14], buf_[praw+15],
+                buf_[praw+16], buf_[praw+17], buf_[praw+18], buf_[praw+19]);
+            info.codeview_guid = g;
+            rd32(praw + 20, info.codeview_age);
+            info.pdb_path = read_cstr(praw + 24, 260);
+            return;
+        }
+    }
+
+    // ---- TLS callback table (executes before the entry point) ----
+    void parse_tls(Info& info, size_t dir_base) {
+        uint32_t rva = 0;
+        rd32(dir_base + 8 * 9, rva);
+        if (!rva) return;
+        size_t off;
+        if (!rva_to_offset(info, rva, off)) return;
+        info.has_tls = true;
+
+        uint64_t cb_va = 0;
+        if (info.is_64bit) { if (!rd64(off + 24, cb_va)) return; }
+        else               { uint32_t v; if (!rd32(off + 12, v)) return; cb_va = v; }
+        if (cb_va == 0 || cb_va < info.image_base) return;
+
+        uint32_t cb_rva = (uint32_t)(cb_va - info.image_base);
+        size_t cb_off;
+        if (!rva_to_offset(info, cb_rva, cb_off)) return;
+        for (int i = 0; i < 512; ++i) {
+            uint64_t ptr = 0;
+            if (info.is_64bit) { if (!rd64(cb_off + (size_t)i*8, ptr)) break; }
+            else               { uint32_t v; if (!rd32(cb_off + (size_t)i*4, v)) break; ptr = v; }
+            if (ptr == 0) break;
+            ++info.tls_callback_count;
+        }
+    }
+
+    // ---- export table (a DLL's own name + exported symbols) ----
+    void parse_exports(Info& info, size_t dir_base) {
+        uint32_t rva = 0;
+        rd32(dir_base + 0, rva);
+        if (!rva) return;
+        size_t off;
+        if (!rva_to_offset(info, rva, off)) return;
+        info.has_exports = true;
+
+        uint32_t name_rva = 0, num_funcs = 0, num_names = 0, names_rva = 0;
+        rd32(off + 12, name_rva);
+        rd32(off + 20, num_funcs);
+        rd32(off + 24, num_names);
+        rd32(off + 32, names_rva);
+        info.export_count = num_funcs;
+
+        size_t noff;
+        if (name_rva && rva_to_offset(info, name_rva, noff))
+            info.export_dll_name = read_cstr(noff, 256);
+
+        size_t names_off;
+        if (names_rva && rva_to_offset(info, names_rva, names_off)) {
+            for (uint32_t i = 0; i < num_names && i < 4096 && info.export_names.size() < 32; ++i) {
+                uint32_t nrva = 0;
+                if (!rd32(names_off + (size_t)i*4, nrva)) break;
+                size_t o;
+                if (rva_to_offset(info, nrva, o)) info.export_names.push_back(read_cstr(o, 256));
+            }
+        }
+    }
+
+    // ---- overlay: bytes appended after the last mapped section ----
+    void compute_overlay(Info& info) {
+        uint64_t end = 0;
+        for (const auto& s : info.sections) {
+            if (s.raw_size == 0) continue;
+            uint64_t e = (uint64_t)s.raw_ptr + s.raw_size;
+            if (e > end) end = e;
+        }
+        uint64_t limit = buf_.size();
+        // the attribute certificate table lives past the sections too - don't
+        // count the signature blob as overlay.
+        if (info.ah_cert_off > 0 && info.ah_cert_size > 0 &&
+            info.ah_cert_off >= end && info.ah_cert_off <= buf_.size())
+            limit = info.ah_cert_off;
+        if (end < limit) {
+            info.overlay_offset = end;
+            info.overlay_size   = limit - end;
+            size_t n = (size_t)info.overlay_size;
+            if (info.overlay_offset + n <= buf_.size())
+                info.overlay_entropy = shannon_entropy(buf_.data() + (size_t)info.overlay_offset, n);
         }
     }
 

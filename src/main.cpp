@@ -19,6 +19,16 @@
 //      out of the score when it's explained by UPX unpacking
 //    - ScreenCapture weight reduced; ScreenCapture+Net combo added
 //
+//  v2.1 additions:
+//    - Similarity hashing: TLSH + ssdeep (byte-compatible with the reference
+//      tools) and the Authenticode hash, alongside MD5/SHA/imphash
+//    - Rich header decode + rich hash (MSVC build fingerprint / attribution)
+//    - Real Authenticode verification (embedded + catalog) with signer name,
+//      not just "a certificate is present"
+//    - MITRE ATT&CK technique mapping from the capability findings
+//    - More PE directories: debug/PDB path, TLS callbacks, exports, overlay,
+//      .NET/CLR detection
+//
 //  API keys: --vt-key / --abuse-key or VT_API_KEY / ABUSEIPDB_API_KEY env vars
 // ---------------------------------------------------------------------------
 #include "ioc.hpp"
@@ -28,6 +38,9 @@
 #include "crypto.hpp"
 #include "intel.hpp"
 #include "console.hpp"
+#include "fuzzy.hpp"
+#include "attack.hpp"
+#include "authenticode.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -37,6 +50,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <set>
+#include <utility>
 
 namespace {
 
@@ -265,6 +279,34 @@ void print_source_result(const horus::intel::SourceResult& r) {
     }
 }
 
+// Authenticode hash: SHA-256 over the file with the checksum, the security
+// data-directory entry and the certificate table carved out (per the PE spec).
+std::string compute_authentihash(const std::vector<uint8_t>& bytes, const horus::pe::Info& info) {
+    if (!info.ah_ready) return {};
+    size_t n  = bytes.size();
+    size_t ck = info.ah_checksum_off;   // 4 bytes
+    size_t sd = info.ah_secdir_off;     // 8 bytes
+    if (ck + 4 > sd || sd + 8 > n) return {};
+
+    size_t cert_off = 0, cert_end = 0;
+    if (info.ah_cert_size > 0 && info.ah_cert_off >= sd + 8 && info.ah_cert_off <= n) {
+        cert_off = info.ah_cert_off;
+        cert_end = std::min(n, cert_off + info.ah_cert_size);
+    }
+
+    const uint8_t* p = bytes.data();
+    std::vector<std::pair<const uint8_t*, size_t>> segs;
+    segs.push_back({p, ck});
+    segs.push_back({p + ck + 4, sd - (ck + 4)});
+    if (cert_off) {
+        segs.push_back({p + sd + 8, cert_off - (sd + 8)});
+        if (cert_end < n) segs.push_back({p + cert_end, n - cert_end});
+    } else {
+        segs.push_back({p + sd + 8, n - (sd + 8)});
+    }
+    return horus::crypto::sha256_hex_segments(segs);
+}
+
 int vt_score_from(int malicious) {
     if (malicious <= 0) return 0;
     int s = 35 + malicious * 4;
@@ -311,6 +353,21 @@ int analyze_file(const Options& opts) {
     // Software hint detection
     SoftwareHints hints = detect_hints(strs);
 
+    // Similarity / attribution hashes (whole-file), signature verification and
+    // ATT&CK mapping. TLSH/ssdeep run on anything; the rest need a valid PE.
+    std::string tlsh_hash   = fuzzy::tlsh(bytes);
+    std::string ssdeep_hash = fuzzy::ssdeep(bytes);
+    std::string authentihash, rich_hash;
+    std::vector<attack::Technique> techs;
+    authcode::Result sig;
+    if (info.valid) {
+        authentihash = compute_authentihash(bytes, info);
+        if (info.has_rich && !info.rich_clear.empty())
+            rich_hash = crypto::md5_hex(info.rich_clear.data(), info.rich_clear.size());
+        techs = attack::techniques(risk);
+        sig   = authcode::verify(opts.target, info.has_authenticode);
+    }
+
     // Optional VT check
     intel::SourceResult vt;
     auto sources = build_sources(opts);
@@ -320,8 +377,21 @@ int analyze_file(const Options& opts) {
     }
 
     int base_score   = info.valid ? risk.score : 0;
-    // Apply UEBA modifier to static score, clamped 0-100
-    int static_score = base_score + behavior.modifier;
+    // A file that carries an embedded certificate but won't verify is the signal
+    // we care about - tampered or forged. Genuinely unsigned files pay nothing.
+    int sig_penalty = 0;
+    if (info.valid && info.has_authenticode) {
+        switch (sig.status) {
+            case authcode::Status::Invalid:   sig_penalty = 30; break;  // digest mismatch
+            case authcode::Status::Revoked:   sig_penalty = 40; break;
+            case authcode::Status::Malformed: sig_penalty = 20; break;  // present but unverifiable
+            case authcode::Status::Untrusted: sig_penalty = 8;  break;
+            case authcode::Status::Expired:   sig_penalty = 3;  break;
+            default: break;
+        }
+    }
+    // Apply UEBA modifier + signature penalty to static score, clamped 0-100
+    int static_score = base_score + behavior.modifier + sig_penalty;
     if (static_score < 0)   static_score = 0;
     if (static_score > 100) static_score = 100;
 
@@ -335,10 +405,38 @@ int analyze_file(const Options& opts) {
         std::cout << "  \"md5\": \"" << hashes.md5 << "\",\n";
         std::cout << "  \"sha1\": \"" << hashes.sha1 << "\",\n";
         std::cout << "  \"sha256\": \"" << hashes.sha256 << "\",\n";
+        if (!tlsh_hash.empty())   std::cout << "  \"tlsh\": \"" << tlsh_hash << "\",\n";
+        if (!ssdeep_hash.empty()) std::cout << "  \"ssdeep\": \"" << json_escape(ssdeep_hash) << "\",\n";
         std::cout << "  \"is_pe\": " << (info.valid ? "true" : "false") << ",\n";
         if (info.valid) {
             std::cout << "  \"bitness\": " << (info.is_64bit ? 64 : 32) << ",\n";
             std::cout << "  \"imphash\": \"" << imphash << "\",\n";
+            if (!authentihash.empty())
+                std::cout << "  \"authentihash\": \"" << authentihash << "\",\n";
+            if (!rich_hash.empty()) {
+                char kb[16]; std::snprintf(kb, sizeof(kb), "%08x", info.rich_xor_key);
+                std::cout << "  \"rich_hash\": \"" << rich_hash << "\",\n";
+                std::cout << "  \"rich_xor_key\": \"" << kb << "\",\n";
+            }
+            if (!info.pdb_path.empty())
+                std::cout << "  \"pdb_path\": \"" << json_escape(info.pdb_path) << "\",\n";
+            std::cout << "  \"is_dotnet\": " << (info.is_dotnet ? "true" : "false") << ",\n";
+            std::cout << "  \"tls_callbacks\": " << info.tls_callback_count << ",\n";
+            if (info.has_exports)
+                std::cout << "  \"exports\": " << info.export_count << ",\n";
+            if (info.overlay_size > 0) {
+                char eb[16]; std::snprintf(eb, sizeof(eb), "%.2f", info.overlay_entropy);
+                std::cout << "  \"overlay_size\": " << info.overlay_size << ",\n";
+                std::cout << "  \"overlay_entropy\": " << eb << ",\n";
+            }
+            std::cout << "  \"signature\": {\"status\": \"" << authcode::status_label(sig.status) << "\"";
+            if (!sig.signer.empty()) std::cout << ", \"signer\": \"" << json_escape(sig.signer) << "\"";
+            if (!sig.issuer.empty()) std::cout << ", \"issuer\": \"" << json_escape(sig.issuer) << "\"";
+            std::cout << "},\n";
+            std::cout << "  \"attack\": [";
+            for (size_t i = 0; i < techs.size(); ++i)
+                std::cout << (i ? ", " : "") << "\"" << techs[i].id << "\"";
+            std::cout << "],\n";
             std::cout << "  \"has_authenticode\": " << (info.has_authenticode ? "true" : "false") << ",\n";
             std::cout << "  \"has_upx\": " << (has_upx ? "true" : "false") << ",\n";
             std::cout << "  \"base_score\": " << base_score << ",\n";
@@ -362,6 +460,8 @@ int analyze_file(const Options& opts) {
     kv("MD5",     hashes.md5);
     kv("SHA-1",   hashes.sha1);
     kv("SHA-256", hashes.sha256);
+    if (!tlsh_hash.empty())   kv("TLSH",   tlsh_hash);
+    if (!ssdeep_hash.empty()) kv("ssdeep", ssdeep_hash);
 
     if (!info.valid) {
         std::cout << "\n  " << ansi::grey("Not a PE file (" + info.error + ") - hashing only.") << "\n";
@@ -375,9 +475,63 @@ int analyze_file(const Options& opts) {
         kv("image base",[&]{ char b[32]; std::snprintf(b,sizeof(b),"0x%llx",(unsigned long long)info.image_base); return std::string(b); }());
         kv("entry RVA", [&]{ char b[32]; std::snprintf(b,sizeof(b),"0x%x",info.entry_point_rva); return std::string(b); }());
         kv("imphash",   imphash);
-        kv("signed",    info.has_authenticode
-                            ? ansi::green("yes (Authenticode directory present)")
-                            : ansi::grey("no"));
+        if (!authentihash.empty()) kv("authentihash", authentihash);
+        if (!rich_hash.empty()) {
+            char kb[16]; std::snprintf(kb, sizeof(kb), "0x%08x", info.rich_xor_key);
+            kv("rich hash", rich_hash + ansi::grey(std::string("  (xor key ") + kb + ")"));
+        }
+        {
+            std::string line;
+            switch (sig.status) {
+                case authcode::Status::Valid:     line = ansi::green("valid"); break;
+                case authcode::Status::NotSigned: line = ansi::grey("unsigned"); break;
+                case authcode::Status::Invalid:   line = ansi::red("INVALID - " + sig.status_text); break;
+                case authcode::Status::Untrusted: line = ansi::yellow("untrusted - " + sig.status_text); break;
+                case authcode::Status::Expired:   line = ansi::yellow("expired - " + sig.status_text); break;
+                case authcode::Status::Revoked:   line = ansi::red("REVOKED - " + sig.status_text); break;
+                case authcode::Status::Malformed: line = ansi::yellow("malformed - " + sig.status_text); break;
+                default:                          line = ansi::grey(sig.status_text); break;
+            }
+            if (!sig.signer.empty()) line += ansi::grey("  [" + sig.signer + "]");
+            kv("signature", line);
+        }
+        if (info.is_dotnet)             kv("managed",  ansi::cyan(".NET / CLR image"));
+        if (info.tls_callback_count > 0)
+            kv("TLS callbacks", ansi::yellow(std::to_string(info.tls_callback_count) +
+                                             " (run before entry point)"));
+        if (info.has_exports && info.export_count > 0)
+            kv("exports", std::to_string(info.export_count) +
+                          (info.export_dll_name.empty() ? "" : "  (" + info.export_dll_name + ")"));
+        if (info.overlay_size > 0) {
+            char b[96];
+            std::snprintf(b, sizeof(b), "%llu bytes  H=%.2f",
+                          (unsigned long long)info.overlay_size, info.overlay_entropy);
+            std::string ov = b;
+            kv("overlay", info.overlay_entropy >= 7.2 ? ansi::yellow(ov) : ov);
+        }
+
+        // ---- build environment / attribution ----
+        if (info.has_rich || !info.pdb_path.empty()) {
+            section("BUILD ENVIRONMENT");
+            if (!info.pdb_path.empty()) {
+                kv("PDB path", ansi::cyan(info.pdb_path));
+                if (!info.codeview_guid.empty())
+                    kv("PDB GUID", info.codeview_guid + ansi::grey("  age " +
+                                   std::to_string(info.codeview_age)));
+            }
+            if (info.has_rich) {
+                std::cout << "  " << ansi::grey("Rich header - " +
+                             std::to_string(info.rich_entries.size()) + " toolchain record(s)") << "\n";
+                size_t shown = 0;
+                for (const auto& e : info.rich_entries) {
+                    if (shown++ >= 12) { std::cout << ansi::grey("      ...") << "\n"; break; }
+                    char b[96];
+                    std::snprintf(b, sizeof(b), "      prodid %-5u  build %-6u  used %u",
+                                  e.prod_id, e.build_id, e.count);
+                    std::cout << ansi::grey(b) << "\n";
+                }
+            }
+        }
 
         section("SECTIONS");
         for (const auto& s : info.sections) {
@@ -424,6 +578,14 @@ int analyze_file(const Options& opts) {
                 std::cout << "  " << ansi::red("!") << " " << f.text << "\n";
         }
 
+        // ---- MITRE ATT&CK ----
+        if (!techs.empty()) {
+            section("MITRE ATT&CK");
+            for (const auto& t : techs)
+                std::cout << "  " << ansi::yellow(t.id) << ansi::grey(std::string(t.id.size() < 10 ? 10 - t.id.size() : 1, ' '))
+                          << t.name << "\n";
+        }
+
         // ---- software hints ----
         if (!hints.matched_keywords.empty() || info.has_authenticode) {
             section("SOFTWARE HINTS");
@@ -439,9 +601,9 @@ int analyze_file(const Options& opts) {
             else if (hints.looks_like_security)
                 std::cout << "  " << ansi::cyan("type     ") << "security / analysis tool\n";
             std::cout << "  " << ansi::cyan("signed   ")
-                      << (info.has_authenticode
-                              ? ansi::green("yes (Authenticode directory present)")
-                              : ansi::grey("no")) << "\n";
+                      << (sig.status == authcode::Status::Valid
+                              ? ansi::green(std::string("yes") + (sig.catalog ? " (catalog)" : ""))
+                              : ansi::grey(authcode::status_label(sig.status))) << "\n";
             if (has_upx)
                 std::cout << "  " << ansi::cyan("packer   ")
                           << ansi::grey("UPX (legitimate open-source packer)") << "\n";
@@ -543,6 +705,9 @@ int analyze_file(const Options& opts) {
         std::cout << "  " << ansi::grey(base_line) << "\n";
         if (vt.ok && vt.found)
             std::cout << "  " << ansi::grey("virustotal: " + vt.summary) << "\n";
+        if (sig_penalty > 0)
+            std::cout << "  " << ansi::red("! signature check failed (" + sig.status_text
+                      + ") - tamper/forgery signal (+" + std::to_string(sig_penalty) + ")") << "\n";
         if (has_upx && final_score < 60)
             std::cout << "  " << ansi::grey("note: UPX packing is common in legitimate open-source software") << "\n";
     }
@@ -610,7 +775,7 @@ int enrich_ioc(const Options& opts) {
 
 void usage() {
     std::cout <<
-    "HORUS v2 - PE analysis + UEBA behavioral profiling\n\n"
+    "HORUS v2.1 - PE analysis, similarity hashing (TLSH/ssdeep) + ATT&CK\n\n"
     "usage: horus <indicator-or-file> [options]\n\n"
     "  <indicator-or-file>   a hash / IP / domain / URL / email, OR a file path\n\n"
     "options:\n"

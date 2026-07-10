@@ -42,7 +42,7 @@ Hand it **anything** and it figures out what to do:
 
 | You give it | What Horus does |
 |---|---|
-| A file path | Hashes it (MD5/SHA-1/SHA-256), parses the PE if applicable, scores risk, pivots on embedded indicators |
+| A file path | Hashes it (MD5/SHA-1/SHA-256 + TLSH/ssdeep/authentihash/rich), parses the PE, verifies its signature, maps capabilities to ATT&CK, scores risk, pivots on embedded indicators |
 | An MD5, SHA-1, or SHA-256 | Queries VirusTotal, reports detections |
 | An IPv4 address | Queries VirusTotal + AbuseIPDB in parallel |
 | A domain name | Queries VirusTotal, reports category and reputation |
@@ -50,6 +50,13 @@ Hand it **anything** and it figures out what to do:
 | An email address | Queries VirusTotal |
 
 No flags needed. `horus <thing>` is all it takes.
+
+### New in v2.1
+
+- **Similarity hashing** — **TLSH** and **ssdeep** digests (byte-for-byte compatible with the reference tools), so you can cluster a sample against a family instead of only scoring it in isolation. Plus the **authentihash** (matches signed-malware campaigns) and the **rich hash** (MSVC build fingerprint).
+- **Real Authenticode verification** — not just "a certificate is present." Runs the signature through `WinVerifyTrust` (embedded **and** catalog), pulls the signer's common name out of the PKCS#7, and flags anything that carries a certificate but no longer verifies as a tamper/forgery signal.
+- **MITRE ATT&CK mapping** — every capability finding is tagged with its technique ID (`T1055`, `T1056.001`, `T1071`…) in both the console report and the JSON.
+- **More of the PE** — Rich header decode, CodeView **PDB path** + GUID (attribution goldmine), **TLS callbacks**, exports, appended **overlay** (size + entropy), and **.NET/CLR** detection.
 
 ---
 
@@ -316,9 +323,13 @@ horus/
 │   ├── main.cpp          CLI entry point + orchestration + report rendering
 │   ├── pe.hpp            PE32 / PE32+ parser — every field bounds-checked
 │   ├── signatures.hpp    110-API knowledge base + capability scoring engine
+│   ├── attack.hpp        capability → MITRE ATT&CK technique mapping
+│   ├── ueba.hpp          behavioral archetype profiling
+│   ├── fuzzy.hpp         TLSH + ssdeep similarity hashing (self-contained)
+│   ├── authenticode.cpp/hpp  signature verification (WinVerifyTrust + crypt32)
 │   ├── ioc.hpp           indicator type auto-detection (no regex, hand-rolled)
 │   ├── json.hpp          zero-dependency JSON parser (recursive descent)
-│   ├── crypto.cpp/hpp    MD5 / SHA-1 / SHA-256 via Windows BCrypt/CNG
+│   ├── crypto.cpp/hpp    MD5 / SHA-1 / SHA-256 / authentihash via BCrypt/CNG
 │   ├── http.cpp/hpp      HTTPS client via Windows WinHTTP
 │   ├── intel.cpp/hpp     VirusTotal v3 + AbuseIPDB v2 (extensible interface)
 │   └── console.hpp       ANSI colour / formatted terminal output
@@ -327,6 +338,7 @@ horus/
 │   ├── test_ioc.cpp      indicator classifier unit tests
 │   ├── test_json.cpp     JSON parser unit tests
 │   ├── test_pe.cpp       PE parser unit tests
+│   ├── test_fuzzy.cpp    TLSH / ssdeep unit tests
 │   └── test_score.cpp    risk scoring engine unit tests
 │
 ├── CMakeLists.txt        CMake build (MSVC or MinGW-w64)
@@ -398,8 +410,8 @@ Open **"x64 Native Tools Command Prompt for VS 2022"** (or 2019), then:
 git clone https://github.com/mobinert/HORUS.git
 cd HORUS
 cl /EHsc /std:c++17 /O2 /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 ^
-   src\main.cpp src\crypto.cpp src\http.cpp src\intel.cpp ^
-   /I src /Fe:horus.exe bcrypt.lib winhttp.lib
+   src\main.cpp src\crypto.cpp src\http.cpp src\intel.cpp src\authenticode.cpp ^
+   /I src /Fe:horus.exe bcrypt.lib winhttp.lib crypt32.lib wintrust.lib ole32.lib
 ```
 
 ### Option B — CMake

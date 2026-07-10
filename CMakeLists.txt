@@ -14,10 +14,11 @@ add_executable(horus
     src/crypto.cpp
     src/http.cpp
     src/intel.cpp
+    src/authenticode.cpp
 )
 
 target_include_directories(horus PRIVATE src)
-target_link_libraries(horus PRIVATE bcrypt winhttp)
+target_link_libraries(horus PRIVATE bcrypt winhttp crypt32 wintrust ole32)
 
 if(MSVC)
     target_compile_options(horus PRIVATE /W4 /O2 /EHsc)

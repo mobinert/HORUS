@@ -11,6 +11,7 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 #include <cstdint>
 
 namespace horus {
@@ -34,6 +35,11 @@ std::string md5_hex(const std::string& text);
 
 // Compute all three digests in one pass over the buffer.
 FileHashes hash_buffer(const std::vector<uint8_t>& data);
+
+// SHA-256 over a set of discontiguous byte ranges, hashed in order. Used for
+// the Authenticode hash, which skips the checksum, the security data-directory
+// entry, and the certificate table. Empty string on failure.
+std::string sha256_hex_segments(const std::vector<std::pair<const uint8_t*, size_t>>& segs);
 
 } // namespace crypto
 } // namespace horus
