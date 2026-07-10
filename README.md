@@ -432,6 +432,19 @@ cmake -B build -G "MinGW Makefiles"
 cmake --build build
 ```
 
+### Running the tests
+
+The unit tests are wired into CTest:
+
+```bat
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Covers the indicator classifier, JSON parser, PE parser, scoring engine and the
+TLSH/ssdeep hashes. They're self-contained — no sample fixtures needed.
+
 ---
 
 ## Imphash
