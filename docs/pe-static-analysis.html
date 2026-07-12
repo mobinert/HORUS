@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PE Static Analysis from the Command Line — A Practical Guide | HORUS</title>
+<meta name="description" content="A hands-on guide to PE static analysis: how to inspect a Windows executable's headers, sections, entropy, imports and signature to tell if it is malware — without ever running it. Worked command-line examples.">
+<meta name="keywords" content="PE static analysis, portable executable analysis, how to check if an exe is malware, Windows malware triage, static malware analysis command line, PE header analysis, imphash, entropy analysis, packed executable, Authenticode verification, DFIR, SOC triage">
+<meta name="author" content="Mobin Erteghaie">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="theme-color" content="#0d1117">
+<link rel="canonical" href="https://mobinert.github.io/HORUS/pe-static-analysis.html">
+<link rel="sitemap" type="application/xml" href="/HORUS/sitemap.xml">
+
+<meta property="og:site_name" content="HORUS">
+<meta property="og:title" content="PE Static Analysis from the Command Line — A Practical Guide">
+<meta property="og:description" content="How to read a Windows PE file's headers, sections, entropy, imports and signature to judge if it is malware — without running it.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mobinert.github.io/HORUS/pe-static-analysis.html">
+<meta property="og:image" content="https://mobinert.github.io/HORUS/banner.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="440">
+<meta name="twitter:image" content="https://mobinert.github.io/HORUS/banner.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PE Static Analysis from the Command Line — A Practical Guide">
+<meta name="twitter:description" content="Read a Windows PE file's headers, sections, entropy, imports and signature to judge if it is malware — without running it.">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "PE Static Analysis from the Command Line — A Practical Guide",
+  "description": "A hands-on guide to PE static analysis: how to inspect a Windows executable's headers, sections, entropy, imports and signature to judge if it is malware, without running it.",
+  "author": { "@type": "Person", "name": "Mobin Erteghaie" },
+  "datePublished": "2026-07-12",
+  "dateModified": "2026-07-12",
+  "image": "https://mobinert.github.io/HORUS/banner.png",
+  "mainEntityOfPage": "https://mobinert.github.io/HORUS/pe-static-analysis.html",
+  "about": [
+    { "@type": "Thing", "name": "Portable Executable" },
+    { "@type": "Thing", "name": "Static malware analysis" }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is PE static analysis?",
+      "acceptedAnswer": { "@type": "Answer", "text": "PE static analysis is the practice of examining a Windows Portable Executable (.exe, .dll, .sys) by reading its bytes on disk rather than running it. You inspect the headers, sections, entropy, imported functions and digital signature to judge intent and risk without ever executing the sample." }
+    },
+    {
+      "@type": "Question",
+      "name": "Can you tell if an EXE is malware without running it?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Often, yes. Static indicators such as packed high-entropy sections, writable and executable memory, dangerous import combinations (for example encryption plus networking), a forged or missing Authenticode signature, and embedded URLs or IP addresses give strong evidence. Static analysis cannot see runtime behaviour, so a low score is not proof of safety and should be paired with sandbox detonation for anything that matters." }
+    },
+    {
+      "@type": "Question",
+      "name": "What is entropy in a PE file and why does it matter?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Entropy measures how random the bytes in a section are, on a scale from 0 to 8. Normal code sits around 6. A section at 7.2 or above is usually compressed, packed or encrypted, which is a common trait of malware hiding its real payload from static analysis." }
+    },
+    {
+      "@type": "Question",
+      "name": "What is an imphash?",
+      "acceptedAnswer": { "@type": "Answer", "text": "An imphash is a hash of a PE file's import table in the order the functions are listed. Because a compiler and linker tend to produce the same import layout across builds of the same malware family, matching imphashes is a fast way to cluster related samples." }
+    }
+  ]
+}
+</script>
+<style>
+  :root{
+    --bg:#0a0e14;--panel:#111823;--panel2:#0c121b;--line:#1c2635;--line2:#26344a;
+    --txt:#e6edf3;--mut:#9aa7b8;--dim:#5f6e82;
+    --cyan:#00e5ff;--green:#00ff88;--teal:#00bcd4;
+    --clean:#22c55e;--low:#38bdf8;--susp:#f59e0b;--mal:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;color:var(--txt);background:var(--bg);
+    font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background-image:
+      radial-gradient(1000px 560px at 82% -10%,rgba(0,229,255,.13),transparent 60%),
+      radial-gradient(820px 520px at 4% -2%,rgba(0,255,136,.09),transparent 55%);
+    background-attachment:fixed;-webkit-font-smoothing:antialiased}
+  a{color:var(--cyan);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:820px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+    background:rgba(10,14,20,.72);border-bottom:1px solid var(--line)}
+  nav .wrap{max-width:1060px;display:flex;align-items:center;justify-content:space-between;height:60px}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.06em;font-family:ui-monospace,monospace}
+  .logo .eye{font-size:20px;filter:drop-shadow(0 0 8px rgba(0,229,255,.7))}
+  .logo .mk{background:linear-gradient(90deg,var(--cyan),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .navlinks{display:flex;gap:22px;align-items:center;font-size:14px;color:var(--mut)}
+  .navlinks a{color:var(--mut)}
+  .navlinks a:hover{color:var(--txt);text-decoration:none}
+  .ghbtn{border:1px solid var(--line2);border-radius:9px;padding:7px 13px;color:var(--txt)!important;background:var(--panel)}
+  .ghbtn:hover{border-color:var(--cyan);text-decoration:none}
+  @media(max-width:660px){.navlinks a.hideSm{display:none}}
+
+  .crumbs{font-size:13px;color:var(--dim);padding:26px 0 0}
+  .crumbs a{color:var(--mut)}
+  article{padding:14px 0 10px}
+  .kicker{color:var(--cyan);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12.5px}
+  h1{font-size:36px;line-height:1.14;margin:12px 0 14px;letter-spacing:-.02em}
+  @media(max-width:880px){h1{font-size:28px}}
+  h1 .g{background:linear-gradient(90deg,var(--cyan),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{color:var(--mut);font-size:19px;margin:0 0 8px}
+  .byline{color:var(--dim);font-size:13.5px;margin:0 0 8px}
+  article h2{font-size:25px;margin:44px 0 12px;letter-spacing:-.01em;scroll-margin-top:74px}
+  article h3{font-size:18px;margin:28px 0 8px}
+  article p{color:#cdd6e0;margin:0 0 15px}
+  article ul,article ol{color:#cdd6e0;margin:0 0 15px;padding-left:22px}
+  article li{margin:6px 0}
+  article strong{color:var(--txt)}
+  article code{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13.5px;color:#c4d0dd}
+
+  .toc{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:18px 22px;margin:26px 0 8px}
+  .toc b{display:block;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan);margin-bottom:9px}
+  .toc ol{margin:0;padding-left:20px;color:var(--mut)}
+  .toc a{color:var(--mut)} .toc a:hover{color:var(--txt)}
+
+  .term{border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,#0c131d,#080c12);
+    box-shadow:0 30px 70px -30px rgba(0,0,0,.85);overflow:hidden;margin:20px 0}
+  .term .bar{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);background:#0b1119}
+  .term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .term .bar .t{margin-left:10px;color:var(--dim);font-size:12px;font-family:ui-monospace,monospace}
+  .term pre{margin:0;padding:15px 16px 17px;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.55;color:#c4d0dd;overflow-x:auto}
+  .c-dim{color:var(--dim)} .c-cyan{color:var(--cyan)} .c-green{color:var(--green)}
+  .c-hit{color:var(--susp)} .c-mal{color:var(--mal);font-weight:700}
+
+  .callout{border:1px solid var(--line2);border-left:3px solid var(--cyan);background:var(--panel);
+    border-radius:10px;padding:15px 18px;margin:20px 0;color:var(--mut);font-size:14.5px}
+  .callout b{color:var(--txt)}
+
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--cyan);font-size:12.5px;letter-spacing:.04em;text-transform:uppercase}
+  td{color:#cdd6e0} td b{color:var(--txt)}
+
+  .faq{border-top:1px solid var(--line);margin-top:12px}
+  .faq details{border-bottom:1px solid var(--line);padding:4px 0}
+  .faq summary{cursor:pointer;padding:14px 2px;font-weight:700;color:var(--txt);list-style:none}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::before{content:"+ ";color:var(--cyan)}
+  .faq details[open] summary::before{content:"– "}
+  .faq p{margin:0 2px 16px;color:var(--mut);font-size:14.5px}
+
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin:30px 0 8px}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:15px;border-radius:11px;padding:12px 20px;border:1px solid transparent}
+  .btn.primary{color:#04140c;background:linear-gradient(90deg,var(--green),var(--cyan));box-shadow:0 10px 30px -12px rgba(0,255,136,.6)}
+  .btn.primary:hover{text-decoration:none;filter:brightness(1.06)}
+  .btn.ghost{color:var(--txt);border-color:var(--line2);background:var(--panel)}
+  .btn.ghost:hover{text-decoration:none;border-color:var(--cyan)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 60px;color:var(--dim);font-size:13.5px;margin-top:40px}
+  footer .wrap{max-width:1060px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;align-items:center}
+  footer a{color:var(--mut)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <div class="logo"><span class="eye">𓂀</span><span class="mk">HORUS</span></div>
+  <div class="navlinks">
+    <a href="./" class="hideSm">Home</a>
+    <a href="./#features" class="hideSm">Features</a>
+    <a href="./#scoring" class="hideSm">Scoring</a>
+    <a class="ghbtn" href="https://github.com/mobinert/HORUS">GitHub ↗</a>
+  </div>
+</div></nav>
+
+<main class="wrap">
+  <div class="crumbs"><a href="./">HORUS</a> &rsaquo; Guide &rsaquo; PE static analysis</div>
+
+  <article>
+    <div class="kicker">Guide</div>
+    <h1>PE Static Analysis from the Command Line: <span class="g">reading a Windows executable without running it</span></h1>
+    <p class="lede">How to look at a Portable Executable's headers, sections, entropy, imports and signature to judge whether it is malware — safely, on disk, before anything runs.</p>
+    <p class="byline">By Mobin Erteghaie · updated July 2026 · ~8 min read</p>
+
+    <div class="toc">
+      <b>On this page</b>
+      <ol>
+        <li><a href="#what">What PE static analysis actually is</a></li>
+        <li><a href="#checklist">The six things to read first</a></li>
+        <li><a href="#worked">A worked example on the command line</a></li>
+        <li><a href="#reading">Reading the result: what is actually suspicious</a></li>
+        <li><a href="#limits">Where static analysis stops</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ol>
+    </div>
+
+    <h2 id="what">What PE static analysis actually is</h2>
+    <p>A <strong>Portable Executable (PE)</strong> is the file format Windows uses for <code>.exe</code>, <code>.dll</code> and <code>.sys</code> files. <strong>Static analysis</strong> means learning what one of these files is and what it can do by <em>reading its bytes on disk</em>, never by executing it. That distinction matters: running an unknown sample is how you get infected, so the ability to reach a confident opinion without detonation is the whole point.</p>
+    <p>The good news is that a PE file has to tell the operating system a lot about itself before Windows will load it — which functions it needs, how its memory is laid out, when it was built, who signed it. All of that is readable from the file, and a surprising amount of malicious intent leaks out of those structures. Static analysis is the discipline of reading them.</p>
+
+    <h2 id="checklist">The six things to read first</h2>
+    <p>You do not need a disassembler to form a strong first opinion. These six signals catch the majority of commodity malware in triage.</p>
+
+    <h3>1. Hashes and fuzzy hashes</h3>
+    <p>Start with identity. <strong>MD5, SHA-1 and SHA-256</strong> uniquely name the file so you can look it up and share it. Then the interesting ones: an <strong>imphash</strong> fingerprints the import table so you can pivot to other samples in the same family, and fuzzy hashes like <strong>TLSH</strong> and <strong>ssdeep</strong> let you cluster files that are <em>similar but not identical</em> — exactly what you get from a malware builder churning out variants.</p>
+
+    <h3>2. The PE headers</h3>
+    <p>The headers carry cheap tells. The <strong>compile timestamp</strong> can be implausible (dated in the future, or years before the file appeared). The <strong>subsystem</strong> tells you console vs GUI. A <strong>rich header</strong> fingerprints the exact toolchain that built it, and a leftover <strong>PDB path</strong> in the debug directory sometimes hands you a developer username or project name — an attribution goldmine.</p>
+
+    <h3>3. Sections and entropy</h3>
+    <p>Each section declares a name, permissions and size. Two things jump out here. First, <strong>entropy</strong>: a value at or above roughly 7.2 (on a 0–8 scale) means the section is compressed, packed or encrypted — a classic way malware hides its payload. Second, <strong>permissions</strong>: a section that is both writable and executable (<strong>RWX</strong>) is rare in honest software and common in packers and shellcode loaders.</p>
+
+    <h3>4. Imports and capabilities</h3>
+    <p>The import table lists the Windows API functions the file calls. This is the richest single signal, but only if you read it correctly. Listing <code>LoadLibrary</code> proves nothing — half of Windows uses it. What matters is <strong>rare primitives and dangerous combinations</strong>: process-injection calls (<code>VirtualAllocEx</code>, <code>WriteProcessMemory</code>, <code>CreateRemoteThread</code>), input capture (<code>SetWindowsHookEx</code>), or the tell-tale pairing of <em>encryption plus networking</em>, which is the shape of both ransomware and command-and-control.</p>
+
+    <h3>5. The digital signature</h3>
+    <p>Do not stop at "a certificate is present." Verify it. Windows can check an <strong>Authenticode</strong> signature (embedded or catalog) and tell you whether it still validates. A file that carries a certificate that <em>no longer verifies</em> is a tampering or forgery signal — far more interesting than an unsigned file.</p>
+
+    <h3>6. Embedded strings and indicators</h3>
+    <p>Finally, sweep the file for readable strings and pull out embedded <strong>indicators of compromise</strong>: URLs, IP addresses, domains, registry paths, suspicious file names. A hard-coded IP in an otherwise plain utility is a lead worth pivoting on with threat intelligence.</p>
+
+    <h2 id="worked">A worked example on the command line</h2>
+    <p>Here is what those six signals look like when you run all of them at once. This is <a href="./">HORUS</a>, a single self-contained Windows executable that performs the whole checklist above from one command — no Python, no installers, no dependencies:</p>
+
+    <div class="term">
+      <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Windows Terminal</span></div>
+<pre><span class="c-dim">&gt;</span> horus suspicious_sample.exe
+
+<span class="c-dim">PE HEADER ─────────────────────────────</span>
+  bitness   64-bit (PE32+)
+  compiled  2018-11-06  <span class="c-hit">(implausible)</span>
+  imphash   9a4f2c8d1e7b3056a82c914d6e0f5b17
+<span class="c-dim">SECTIONS ──────────────────────────────</span>
+  .text   r-x  H=6.21
+  UPX0    rwx  H=7.94  <span class="c-mal">RWX + packed</span>
+<span class="c-dim">CAPABILITIES ──────────────────────────</span>
+  <span class="c-cyan">[Cryptography] [Network] [Persistence]</span>
+  <span class="c-hit">! Crypto + network I/O (exfil / C2 pattern)  +12</span>
+  <span class="c-hit">! RWX high-entropy section 'UPX0'            +18</span>
+<span class="c-dim">EMBEDDED IOCs ─────────────────────────</span>
+  url  http://185.220.101.5:8080/gate.php
+<span class="c-dim">VERDICT ───────────────────────────────</span>
+  <span class="c-mal">[ LIKELY MALICIOUS ]   risk 98/100</span></pre>
+    </div>
+
+    <p>Point it at a file and you get the hashes, the header tells, the section/entropy map, the interpreted capabilities and the embedded indicators in one pass. Add a free VirusTotal or AbuseIPDB key and it enriches hashes, IPs, domains and URLs against live threat intel. Add <code>--json</code> and the same output drops straight into a SIEM or a triage pipeline.</p>
+
+    <div class="callout"><b>Read-only by design.</b> Good static tooling never executes the sample — it only reads bytes. HORUS bounds-checks every offset in the PE parser, so even malformed or hostile files are safe to point it at.</div>
+
+    <h2 id="reading">Reading the result: what is actually suspicious</h2>
+    <p>The mistake beginners make is treating a long import list as scary. It is not. Judgement comes from weighting the rare over the common, and from combinations. The table below is a rough sense of how much different findings should move your suspicion.</p>
+
+    <table>
+      <thead><tr><th>Finding</th><th>On its own</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><b>Uses <code>LoadLibrary</code> / <code>CreateProcess</code></b></td><td>Ignore</td><td>Ubiquitous in benign software</td></tr>
+        <tr><td><b>High-entropy section (≥7.2)</b></td><td>Notable</td><td>Packed or encrypted payload</td></tr>
+        <tr><td><b>RWX section</b></td><td>Strong</td><td>Rare in honest code; typical of loaders</td></tr>
+        <tr><td><b>Process-injection APIs</b></td><td>Strong</td><td>Core technique for stealth and evasion</td></tr>
+        <tr><td><b>Crypto + networking together</b></td><td>Strong</td><td>Ransomware and C2 both look like this</td></tr>
+        <tr><td><b>Certificate present but invalid</b></td><td>Strong</td><td>Tamper or forgery signal</td></tr>
+      </tbody>
+    </table>
+    <p>None of these is a conviction on its own. A packer is used by plenty of legitimate commercial software; encryption is everywhere. The verdict comes from <em>stacking</em> weak-to-strong signals and cross-checking against threat-intel consensus — which is exactly why a scoring engine that understands combinations beats eyeballing a raw import dump.</p>
+
+    <h2 id="limits">Where static analysis stops</h2>
+    <p>Be honest about the ceiling. Static analysis reads what the file <em>declares</em>; it cannot see what the file <em>does</em> at runtime. A heavily obfuscated sample that resolves its imports dynamically, decrypts its payload in memory, or pulls its real code from the network will look quiet on disk. Entropy heuristics partly compensate, but a low static score is a prompt to keep going, not a clean bill of health.</p>
+    <p>The professional workflow is layered: fast static triage first to sort the obvious and prioritise, then threat-intel enrichment, then — for anything that matters — dynamic analysis in a sandbox where you watch the real behaviour. Static analysis earns its keep at the front of that funnel, where speed and safety matter most.</p>
+
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/mobinert/HORUS/releases/latest">⬇ Download horus.exe</a>
+      <a class="btn ghost" href="./">How HORUS works</a>
+    </div>
+
+    <h2 id="faq">FAQ</h2>
+    <div class="faq">
+      <details open>
+        <summary>What is PE static analysis?</summary>
+        <p>It is examining a Windows Portable Executable (<code>.exe</code>, <code>.dll</code>, <code>.sys</code>) by reading its bytes on disk rather than running it. You inspect the headers, sections, entropy, imported functions and digital signature to judge intent and risk without ever executing the sample.</p>
+      </details>
+      <details>
+        <summary>Can you tell if an EXE is malware without running it?</summary>
+        <p>Often, yes. Packed high-entropy sections, RWX memory, dangerous import combinations (encryption plus networking), a forged or missing Authenticode signature, and embedded URLs or IPs give strong evidence. Static analysis cannot see runtime behaviour, though, so a low score is not proof of safety — pair it with a sandbox detonation for anything important.</p>
+      </details>
+      <details>
+        <summary>What is entropy in a PE file and why does it matter?</summary>
+        <p>Entropy measures how random a section's bytes are, from 0 to 8. Normal code sits near 6. A section at 7.2 or above is usually compressed, packed or encrypted — a common way malware hides its real payload from static analysis.</p>
+      </details>
+      <details>
+        <summary>What is an imphash?</summary>
+        <p>An imphash is a hash of the PE import table in the order the functions appear. Because a given compiler and linker tend to produce the same import layout across builds of the same malware family, matching imphashes is a quick way to cluster related samples.</p>
+      </details>
+      <details>
+        <summary>What tool can do all of this from the command line?</summary>
+        <p><a href="./">HORUS</a> is a free, open-source, single-file Windows CLI that runs the entire checklist above — hashing, PE parsing, entropy, capability scoring, signature verification and live threat-intel enrichment — from one command, with zero dependencies.</p>
+      </details>
+    </div>
+  </article>
+</main>
+
+<footer><div class="wrap">
+  <div>Built for defenders by <a href="https://github.com/mobinert"><b>Mobin Erteghaie</b></a> · <a href="https://github.com/mobinert/HORUS/blob/main/LICENSE">MIT License</a> · free forever</div>
+  <div><a href="https://github.com/mobinert/HORUS">⭐ Star on GitHub ↗</a></div>
+</div></footer>
+
+</body>
+</html>
