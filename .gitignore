@@ -1,6 +1,11 @@
 # build output
 build/
+build_v3/
+build*/
 horus.exe
+horus-cli.exe
+horus-gui.exe
+horus-report-*.html
 *.obj
 *.pdb
 *.ilk

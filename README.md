@@ -38,6 +38,14 @@
 
 Horus is a **single-file Windows security triage tool** — no Python, no installers, no dependencies. It links only against APIs that already ship with Windows (`BCrypt` for hashing, `WinHTTP` for HTTPS) and compiles down to one self-contained `.exe`.
 
+Ships in three flavours from one engine — pick whichever fits your box:
+
+| Binary | What it is |
+|---|---|
+| `horus-cli.exe` | the pure command line, zero third-party dependencies |
+| `horus-gui.exe` | drag a file on it and get a **glass-console** report in your browser |
+| `horus.exe` | both — CLI by default, `--gui` (or a double-click) opens the GUI |
+
 Hand it **anything** and it figures out what to do:
 
 | You give it | What Horus does |
@@ -50,6 +58,14 @@ Hand it **anything** and it figures out what to do:
 | An email address | Queries VirusTotal |
 
 No flags needed. `horus <thing>` is all it takes.
+
+### New in v3.0
+
+- **Glass console (GUI)** — a self-contained, glassmorphism report that renders in the browser: a risk ring, a live force-directed **threat graph** (sample → capabilities → ATT&CK → embedded IOCs), and a **MITRE ATT&CK heatmap** that lights up the techniques it found. No CDN, no runtime, nothing leaves the machine. `horus-gui.exe`, `horus --gui`, or `horus --html report.html` to export one.
+- **Batch / folder scan** — `horus --scan <dir>` walks a directory, scores every file, prints a worst-first table, and dumps `--csv` / `--json-out` for a ticket.
+- **PE diff** — `horus --diff a.exe b.exe`: imphash, rich-hash, section-entropy drift, and TLSH distance side by side. "Same family?" without uploading a thing.
+- **Config file + intel cache** — drop keys and a `cache_ttl_hours` in `~/.horus.json`; repeat VT/AbuseIPDB lookups come back instantly and don't burn quota.
+- **Clipboard input** — `horus --clip` grabs whatever indicator you already copied.
 
 ### New in v2.1
 
@@ -212,12 +228,27 @@ horus <indicator-or-file> [options]
   <indicator-or-file>   anything: a file path, hash, IP, domain, URL, or email
 
 options:
+  --scan <dir>          triage every file in a folder, worst-first
+  --diff <a> <b>        compare two PEs (imphash / TLSH / section entropy)
+  --clip                read the indicator from the clipboard
+  --gui                 open the glass-console GUI (unified build)
+  --html <file>         write the glass-console report to an HTML file
+  --csv <file>          with --scan, also write a CSV
+  --json-out <file>     with --scan, also write a JSON array
+  --cache-ttl <hours>   cache intel lookups for N hours (0 = off)
   --vt-key    <key>     VirusTotal API key      (overrides VT_API_KEY env)
   --abuse-key <key>     AbuseIPDB API key        (overrides ABUSEIPDB_API_KEY env)
   --strings             dump extracted ASCII/UTF-16 strings from the file
+  --profile             verbose UEBA signal breakdown
   --json                machine-readable JSON output (exit code 1 = suspicious/malicious)
   --no-color            disable ANSI colour (auto-disabled when piped)
   -h, --help            show this help
+```
+
+A `~/.horus.json` is read if present, so you don't paste keys every run:
+
+```json
+{ "vt_key": "…", "abuse_key": "…", "cache_ttl_hours": 24 }
 ```
 
 ### File Analysis Examples
@@ -404,14 +435,16 @@ Candidate sources to add: URLhaus · OTX (AlienVault) · GreyNoise · Shodan · 
 
 ### Option A — MSVC Developer Command Prompt
 
-Open **"x64 Native Tools Command Prompt for VS 2022"** (or 2019), then:
+Open **"x64 Native Tools Command Prompt for VS 2022"** (or 2019), then this builds
+the pure CLI (the GUI/unified builds embed the HTML page at configure time, so use
+CMake for those):
 
 ```bat
 git clone https://github.com/mobinert/HORUS.git
 cd HORUS
 cl /EHsc /std:c++17 /O2 /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 ^
-   src\main.cpp src\crypto.cpp src\http.cpp src\intel.cpp src\authenticode.cpp ^
-   /I src /Fe:horus.exe bcrypt.lib winhttp.lib crypt32.lib wintrust.lib ole32.lib
+   src\main_cli.cpp src\crypto.cpp src\http.cpp src\intel.cpp src\authenticode.cpp ^
+   /I src /Fe:horus-cli.exe bcrypt.lib winhttp.lib crypt32.lib wintrust.lib ole32.lib user32.lib
 ```
 
 ### Option B — CMake
@@ -419,9 +452,9 @@ cl /EHsc /std:c++17 /O2 /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 ^
 ```bat
 git clone https://github.com/mobinert/HORUS.git
 cd HORUS
-cmake -B build -G "Visual Studio 17 2022"
+cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
-:: binary at build\Release\horus.exe
+:: binaries at build\Release\ :  horus-cli.exe  horus.exe  horus-gui.exe
 ```
 
 ### Option C — MinGW-w64 (MSYS2)

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>HORUS — the all-seeing eye</title>
+<style>
+:root{
+  --bg0:#070912; --bg1:#0c1024; --glass:rgba(20,26,48,.45);
+  --glass2:rgba(30,38,66,.35); --stroke:rgba(140,170,255,.16);
+  --ink:#eaf0ff; --muted:#9aa7d0; --faint:#5f6a94;
+  --cyan:#33e5ff; --violet:#8a7dff; --green:#37e0a0;
+  --amber:#ffc050; --red:#ff5d6c; --shadow:0 20px 60px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font:15px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;
+  color:var(--ink); background:var(--bg0); overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+/* animated aurora background */
+.aurora{position:fixed;inset:-30% -10% -10% -10%;z-index:-1;filter:blur(70px);opacity:.7}
+.aurora span{position:absolute;border-radius:50%;mix-blend-mode:screen;animation:drift 22s ease-in-out infinite}
+.aurora .a{width:52vw;height:52vw;left:-6vw;top:-8vw;background:radial-gradient(circle,#3b2bff,transparent 60%)}
+.aurora .b{width:46vw;height:46vw;right:-8vw;top:2vw;background:radial-gradient(circle,#00b3ff,transparent 60%);animation-delay:-6s}
+.aurora .c{width:40vw;height:40vw;left:24vw;bottom:-14vw;background:radial-gradient(circle,#00e5a8,transparent 60%);animation-delay:-12s}
+@keyframes drift{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(4vw,3vh) scale(1.08)}66%{transform:translate(-3vw,-2vh) scale(.96)}}
+
+.wrap{max-width:1180px;margin:0 auto;padding:34px 26px 80px}
+header.top{display:flex;align-items:center;gap:16px;margin-bottom:26px}
+.eye{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;
+  background:linear-gradient(140deg,rgba(51,229,255,.25),rgba(138,125,255,.25));
+  border:1px solid var(--stroke);box-shadow:inset 0 0 20px rgba(51,229,255,.25);font-size:22px}
+.brand h1{margin:0;font-size:20px;letter-spacing:.5px}
+.brand p{margin:0;color:var(--muted);font-size:12.5px}
+.badge-ver{margin-left:auto;font-size:11px;color:var(--faint);border:1px solid var(--stroke);
+  padding:5px 10px;border-radius:999px;background:var(--glass2)}
+
+.card{background:var(--glass);border:1px solid var(--stroke);border-radius:18px;
+  backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+  box-shadow:var(--shadow);padding:20px 22px;margin-bottom:18px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent)}
+.card h2{margin:0 0 14px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);font-weight:600}
+.grid{display:grid;gap:18px}
+@media(min-width:820px){.grid.two{grid-template-columns:1fr 1fr}.grid.side{grid-template-columns:1.35fr 1fr}}
+
+/* hero verdict */
+.hero{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+.ring{--p:0;width:132px;height:132px;border-radius:50%;flex:none;display:grid;place-items:center;position:relative;
+  background:conic-gradient(var(--rc) calc(var(--p)*1%), rgba(255,255,255,.06) 0);
+  filter:drop-shadow(0 0 18px var(--rc))}
+.ring::after{content:"";position:absolute;inset:11px;border-radius:50%;background:rgba(9,12,26,.86);border:1px solid var(--stroke)}
+.ring b{position:relative;z-index:1;font-size:34px}.ring i{position:relative;z-index:1;font-style:normal;color:var(--muted);font-size:12px;margin-top:2px}
+.ring .col{position:relative;z-index:1;display:grid;place-items:center;line-height:1}
+.hero .meta{flex:1;min-width:240px}
+.verdict{display:inline-block;padding:8px 16px;border-radius:12px;font-weight:700;letter-spacing:.6px;
+  box-shadow:0 0 26px var(--rc);background:var(--rc);color:#0a0d18}
+.target{margin:12px 0 4px;font-size:17px;word-break:break-all}
+.sub{color:var(--muted);font-size:13px}
+
+/* key-value rows */
+.kv{display:grid;grid-template-columns:150px 1fr;gap:6px 14px;font-size:13.5px}
+.kv dt{color:var(--faint)}
+.kv dd{margin:0;word-break:break-all;font-variant-numeric:tabular-nums}
+.mono{font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px}
+
+.pill{display:inline-block;padding:3px 9px;border-radius:8px;font-size:11.5px;margin:2px 4px 2px 0;
+  border:1px solid var(--stroke);background:var(--glass2);color:var(--muted)}
+.pill.hot{color:#101427;background:var(--amber);border-color:transparent;font-weight:600}
+.pill.warn{color:#101427;background:var(--red);border-color:transparent;font-weight:600}
+.pill.ok{color:#08110d;background:var(--green);border-color:transparent;font-weight:600}
+.tag{color:var(--cyan)}
+
+/* entropy bar */
+.sec{display:flex;align-items:center;gap:12px;margin:7px 0;font-size:13px}
+.sec .nm{width:82px;color:var(--ink);font-family:Consolas,monospace}
+.sec .fl{width:42px;color:var(--faint);font-family:Consolas,monospace}
+.bar{flex:1;height:9px;border-radius:6px;background:rgba(255,255,255,.06);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--cyan),var(--violet))}
+.sec.hi .bar i{background:linear-gradient(90deg,var(--amber),var(--red))}
+.sec .h{width:44px;text-align:right;color:var(--muted);font-family:Consolas,monospace}
+
+/* ATT&CK heatmap */
+.att{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.att .cell{border:1px solid var(--stroke);border-radius:11px;padding:9px 11px;background:var(--glass2);opacity:.4;transition:.3s}
+.att .cell .id{font-family:Consolas,monospace;font-size:11px;color:var(--faint)}
+.att .cell .nm{font-size:12px;color:var(--muted);margin-top:2px}
+.att .cell.on{opacity:1;border-color:rgba(255,93,108,.6);background:rgba(255,93,108,.12);
+  box-shadow:0 0 18px rgba(255,93,108,.25)}
+.att .cell.on .id{color:var(--red)}.att .cell.on .nm{color:var(--ink)}
+
+/* threat graph */
+#graph{width:100%;height:340px;display:block}
+.gnode{cursor:default}
+.gedge{stroke:rgba(140,170,255,.22);stroke-width:1.2}
+.glabel{fill:var(--muted);font-size:10.5px;pointer-events:none}
+
+.cap{border:1px solid var(--stroke);border-radius:12px;padding:11px 13px;margin-bottom:9px;background:var(--glass2)}
+.cap .t{font-weight:600;font-size:13px}
+.cap .b{color:var(--muted);font-size:12px;margin-top:2px}
+.cap .a{color:var(--faint);font-size:11.5px;font-family:Consolas,monospace;margin-top:5px;word-break:break-all}
+.cap.sig{border-color:rgba(255,192,80,.5);box-shadow:0 0 16px rgba(255,192,80,.12)}
+.find{color:#ffd7dc;font-size:13px;margin:5px 0;padding-left:16px;position:relative}
+.find::before{content:"!";position:absolute;left:0;color:var(--red);font-weight:800}
+
+.empty{text-align:center;padding:70px 20px;color:var(--muted)}
+.empty .drop{max-width:460px;margin:22px auto 0;border:1.5px dashed var(--stroke);border-radius:20px;
+  padding:40px 24px;background:var(--glass2)}
+.empty code{background:rgba(255,255,255,.06);padding:2px 7px;border-radius:6px;color:var(--cyan);font-size:13px}
+.foot{text-align:center;color:var(--faint);font-size:11.5px;margin-top:30px}
+</style>
+</head>
+<body>
+<h2 class="sr-only">HORUS malware triage report</h2>
+<div class="aurora"><span class="a"></span><span class="b"></span><span class="c"></span></div>
+<div class="wrap">
+  <header class="top">
+    <div class="eye">🔱</div>
+    <div class="brand"><h1>HORUS</h1><p>the all-seeing eye — IOC enrichment &amp; PE static analysis</p></div>
+    <div class="badge-ver">v3.0 · glass console</div>
+  </header>
+  <main id="app"></main>
+  <div class="foot">generated locally · no data left this machine</div>
+</div>
+
+<script>
+const REPORT = /*__HORUS_REPORT__*/null;
+
+// technique universe Horus can map (from attack.hpp) — lit up when detected
+const ATTACK_UNIVERSE = [
+  ["T1055","Process Injection"],["T1620","Reflective Loading"],["T1106","Native API"],
+  ["T1027.007","Dynamic API Resolution"],["T1622","Debugger Evasion"],["T1497","Sandbox Evasion"],
+  ["T1547.001","Registry Run Keys"],["T1071","App Layer Protocol"],["T1573","Encrypted Channel"],
+  ["T1056.001","Keylogging"],["T1113","Screen Capture"],["T1134","Token Manipulation"],
+  ["T1543.003","Windows Service"],["T1082","System Info Discovery"],["T1070","Indicator Removal"],
+  ["T1486","Data Encrypted for Impact"],["T1041","Exfiltration Over C2"]
+];
+
+const $=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+function riskCol(s){return s>=60?"var(--red)":s>=30?"var(--amber)":s>=10?"var(--cyan)":"var(--green)";}
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]));}
+
+function card(title,bodyNode){const c=$("div","card");if(title)c.appendChild($("h2",null,title));c.appendChild(bodyNode);return c;}
+function kv(pairs){const d=$("dl","kv");pairs.forEach(([k,v])=>{if(v==null||v==="")return;d.appendChild($("dt",null,esc(k)));const dd=$("dd","mono");dd.innerHTML=v;d.appendChild(dd);});return d;}
+
+function hero(r){
+  const s=r.scores?r.scores.final:(r.worst||0), rc=riskCol(s);
+  const wrap=$("div","hero");wrap.style.setProperty("--rc",rc);
+  const ring=$("div","ring");ring.style.setProperty("--rc",rc);ring.style.setProperty("--p",s);
+  ring.appendChild($("div","col",`<b>${s}</b><i>/ 100</i>`));
+  const meta=$("div","meta");
+  meta.appendChild($("span","verdict",esc(r.verdict||"—")));
+  meta.appendChild($("div","target",esc(r.target||"")));
+  const sub = r.kind==="file"
+    ? (r.is_pe? (r.pe.bitness+"-bit "+r.pe.type+" · "+esc(r.pe.machine)) : "non-PE file · hashed only")
+    : ("indicator · "+esc(r.type));
+  meta.appendChild($("div","sub",sub));
+  wrap.appendChild(ring);wrap.appendChild(meta);
+  const c=$("div","card");c.appendChild(wrap);return c;
+}
+
+function hashCard(h){
+  return card("Hashes & similarity", kv([
+    ["MD5",h.md5],["SHA-1",h.sha1],["SHA-256",h.sha256],
+    ["imphash",h.imphash],["authentihash",h.authentihash],["rich hash",h.rich_hash],
+    ["TLSH",h.tlsh],["ssdeep",h.ssdeep]
+  ]));
+}
+
+function peCard(p,sig){
+  const rows=[["type",esc(p.type)],["bitness",p.bitness+"-bit"],["machine",esc(p.machine)],
+    ["subsystem",esc(p.subsystem)],["compiled",esc(p.compiled)+(p.timestamp_suspicious?' <span class="tag">(suspicious)</span>':"")],
+    ["image base",p.image_base],["entry RVA",p.entry_rva]];
+  if(p.is_dotnet)rows.push([".NET / CLR",'<span class="tag">managed image</span>']);
+  if(p.tls_callbacks>0)rows.push(["TLS callbacks",p.tls_callbacks+" (pre-entry)"]);
+  if(p.exports>0)rows.push(["exports",p.exports]);
+  if(p.overlay_size>0)rows.push(["overlay",p.overlay_size+" B  H="+p.overlay_entropy]);
+  if(p.pdb_path)rows.push(["PDB path",'<span class="tag">'+esc(p.pdb_path)+'</span>']);
+  let sigTxt=esc(sig.status);
+  if(sig.status==="valid")sigTxt='<span class="tag" style="color:var(--green)">valid</span>'+(sig.signer?" · "+esc(sig.signer):"");
+  else if(/invalid|revoked/i.test(sig.status))sigTxt='<span style="color:var(--red)">'+esc(sig.status)+'</span>';
+  rows.push(["signature",sigTxt]);
+  return card("PE header",kv(rows));
+}
+
+function sectionsCard(secs){
+  const b=$("div");
+  secs.forEach(s=>{
+    const hi=s.rwx||s.entropy>=7.2;
+    const row=$("div","sec"+(hi?" hi":""));
+    row.appendChild($("span","nm",esc(s.name)));
+    row.appendChild($("span","fl",esc(s.flags)+(s.rwx?" ⚠":"")));
+    const bar=$("div","bar");bar.appendChild($("i",null,""));bar.firstChild.style.width=Math.min(100,s.entropy/8*100)+"%";
+    row.appendChild(bar);
+    row.appendChild($("span","h","H="+s.entropy));
+    b.appendChild(row);
+  });
+  return card("Sections · entropy",b);
+}
+
+function capCard(caps,finds){
+  const b=$("div");
+  if(!caps.length)b.appendChild($("div","sub","none of the watched API groups were imported"));
+  caps.forEach(c=>{
+    const d=$("div","cap"+(c.significant?" sig":""));
+    d.appendChild($("div","t",esc(c.label)+(c.significant?"":' <span class="pill">common</span>')));
+    d.appendChild($("div","b",esc(c.blurb)));
+    if(c.apis&&c.apis.length)d.appendChild($("div","a",c.apis.slice(0,6).map(esc).join("  ")+(c.apis.length>6?" …":"")));
+    b.appendChild(d);
+  });
+  (finds||[]).forEach(f=>b.appendChild($("div","find",esc(f.text))));
+  return card("Capabilities",b);
+}
+
+function attackCard(list){
+  const on=new Set((list||[]).map(t=>t.id));
+  const g=$("div","att");
+  ATTACK_UNIVERSE.forEach(([id,nm])=>{
+    const c=$("div","cell"+(on.has(id)?" on":""));
+    c.appendChild($("div","id",id));c.appendChild($("div","nm",nm));
+    g.appendChild(c);
+  });
+  return card("MITRE ATT&CK heatmap",g);
+}
+
+function uebaCard(u){
+  const col=u.modifier>0?"var(--red)":u.modifier<0?"var(--green)":"var(--amber)";
+  const b=$("div");
+  b.appendChild(kv([
+    ["archetype",'<span style="color:'+col+'">'+esc(u.archetype)+'</span>  <span class="sub">'+Math.round(u.confidence*100)+'% conf</span>'],
+    ["reasoning",esc(u.reasoning)],
+    ["modifier",'<span style="color:'+col+'">'+(u.modifier>0?"+":"")+u.modifier+'</span>']
+  ]));
+  return card("Behavioral profile · UEBA",b);
+}
+
+function iocCard(e,hints){
+  const b=$("div");let any=false;
+  (e.urls||[]).forEach(u=>{any=true;b.appendChild($("div","mono",'<span class="tag">url</span> '+esc(u)));});
+  (e.ips||[]).forEach(i=>{any=true;b.appendChild($("div","mono",'<span class="tag">ip&nbsp;</span> '+esc(i)));});
+  if((e.tokens||[]).length){any=true;const p=$("div");p.style.marginTop="6px";e.tokens.forEach(t=>p.appendChild($("span","pill",esc(t))));b.appendChild(p);}
+  if(hints&&hints.keywords&&hints.keywords.length){any=true;const p=$("div");p.style.marginTop="8px";p.innerHTML='<span class="sub">hints: </span>';hints.keywords.forEach(k=>p.appendChild($("span","pill",esc(k))));b.appendChild(p);}
+  if(!any)b.appendChild($("div","sub","no embedded indicators found in strings"));
+  return card("Embedded indicators",b);
+}
+
+// ---- force-directed threat graph ----
+function graphCard(r){
+  const wrap=$("div");const NS="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(NS,"svg");svg.setAttribute("id","graph");svg.setAttribute("viewBox","0 0 700 340");
+  wrap.appendChild(svg);
+  const W=700,H=340,cx=W/2,cy=H/2;
+  const nodes=[],edges=[];
+  const center={id:"c",x:cx,y:cy,r:26,fixed:true,col:riskCol(r.scores?r.scores.final:r.worst||0),
+    label:(r.kind==="file"?(r.target.split(/[\\/]/).pop()||"file"):r.target).slice(0,22)};
+  nodes.push(center);
+  const add=(label,col,rad)=>{const a=Math.random()*6.28,d=90+Math.random()*40;
+    const n={id:label,x:cx+Math.cos(a)*d,y:cy+Math.sin(a)*d,r:rad||8,col:col,label:label,vx:0,vy:0};
+    nodes.push(n);edges.push([center,n]);return n;};
+  if(r.kind==="file"){
+    (r.capabilities||[]).filter(c=>c.significant).slice(0,7).forEach(c=>add(c.label,"var(--amber)",9));
+    (r.attack||[]).slice(0,8).forEach(t=>add(t.id,"var(--red)",8));
+    (r.embedded&&r.embedded.ips||[]).slice(0,5).forEach(i=>add(i,"var(--cyan)",7));
+    (r.embedded&&r.embedded.urls||[]).slice(0,4).forEach(u=>add((u.split("/")[2]||u).slice(0,18),"var(--cyan)",7));
+    if(r.ueba&&r.ueba.archetype&&r.ueba.archetype!=="Unknown")add(r.ueba.archetype,r.ueba.modifier<0?"var(--green)":"var(--violet)",10);
+  }else{
+    (r.sources||[]).forEach(s=>add(s.source,s.found&&s.malicious>0?"var(--red)":"var(--green)",11));
+  }
+  const eG=[],nG=[];
+  edges.forEach(()=>{const l=document.createElementNS(NS,"line");l.setAttribute("class","gedge");svg.appendChild(l);eG.push(l);});
+  nodes.forEach(n=>{
+    const g=document.createElementNS(NS,"g");g.setAttribute("class","gnode");
+    const c=document.createElementNS(NS,"circle");c.setAttribute("r",n.r);c.setAttribute("fill",n.col);
+    c.setAttribute("opacity",n.fixed?"0.95":"0.85");c.style.filter="drop-shadow(0 0 8px "+n.col+")";
+    const t=document.createElementNS(NS,"text");t.setAttribute("class","glabel");t.setAttribute("text-anchor","middle");
+    t.setAttribute("dy",-(n.r+5));t.textContent=n.label;
+    g.appendChild(c);g.appendChild(t);svg.appendChild(g);nG.push({g,n});
+  });
+  function step(){
+    for(let i=1;i<nodes.length;i++){const a=nodes[i];
+      for(let j=i+1;j<nodes.length;j++){const b=nodes[j];
+        let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1,f=900/d2,d=Math.sqrt(d2);
+        a.vx+=f*dx/d;a.vy+=f*dy/d;b.vx-=f*dx/d;b.vy-=f*dy/d;}}
+    edges.forEach(([a,b])=>{let dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=(d-118)*0.01;
+      b.vx-=f*dx/d;b.vy-=f*dy/d;});
+    nodes.forEach(n=>{if(n.fixed)return;n.vx+=(cx-n.x)*0.002;n.vy+=(cy-n.y)*0.002;
+      n.x+=n.vx*=0.86;n.y+=n.vy*=0.86;n.x=Math.max(24,Math.min(W-24,n.x));n.y=Math.max(24,Math.min(H-24,n.y));});
+    eG.forEach((l,i)=>{const[a,b]=edges[i];l.setAttribute("x1",a.x);l.setAttribute("y1",a.y);l.setAttribute("x2",b.x);l.setAttribute("y2",b.y);});
+    nG.forEach(({g,n})=>g.setAttribute("transform","translate("+n.x+","+n.y+")"));
+    requestAnimationFrame(step);
+  }
+  step();
+  return card("Threat graph",wrap);
+}
+
+function sourcesCard(r){
+  const b=$("div");
+  if(!r.sources.length)b.appendChild($("div","sub","no configured source handles this indicator type — set VT_API_KEY / ABUSEIPDB_API_KEY"));
+  r.sources.forEach(s=>{
+    const d=$("div","cap"+(s.found&&s.malicious>0?" sig":""));
+    let head='<span class="t">'+esc(s.source)+'</span> ';
+    if(!s.ok)head+='<span class="pill">'+esc(s.error||"error")+'</span>';
+    else if(!s.found)head+='<span class="pill ok">clean / unknown</span>';
+    else head+='<span class="pill '+(s.malicious>0||s.score>=50?"warn":s.score>=25?"hot":"ok")+'">'+esc(s.summary)+'</span>';
+    d.innerHTML=head;
+    (s.details||[]).forEach(kvp=>d.appendChild($("div","a",esc(kvp.k)+": "+esc(kvp.v))));
+    b.appendChild(d);
+  });
+  return card("Threat intelligence",b);
+}
+
+function landing(){
+  const e=$("div","empty");
+  e.innerHTML='<div style="font-size:44px">🔱</div><h2 style="letter-spacing:1px;margin:8px 0">Drop it anywhere. Point it at anything.</h2>'+
+    '<div class="drop"><p>Run <code>horus-gui.exe</code> and pick a file, or drag a sample onto it.</p>'+
+    '<p class="sub">Also: <code>horus &lt;file&gt;</code> · <code>horus --scan &lt;dir&gt;</code> · <code>horus --diff a b</code></p></div>';
+  return card(null,e);
+}
+
+function render(){
+  const app=document.getElementById("app");app.innerHTML="";
+  const r=REPORT;
+  if(!r){app.appendChild(landing());return;}
+  if(r.kind==="error"){const c=$("div","card");c.appendChild($("div","empty","⚠ "+esc(r.error)));app.appendChild(c);return;}
+  app.appendChild(hero(r));
+  if(r.kind==="indicator"){
+    const g=$("div","grid side");g.appendChild(sourcesCard(r));g.appendChild(graphCard(r));app.appendChild(g);return;
+  }
+  // file
+  app.appendChild(graphCard(r));
+  const g1=$("div","grid two");
+  g1.appendChild(hashCard(r.hashes));
+  if(r.is_pe)g1.appendChild(peCard(r.pe,r.signature)); else g1.appendChild(card("File","<div class='sub'>Not a PE — hashes only.</div>"));
+  app.appendChild(g1);
+  if(r.is_pe){
+    app.appendChild(sectionsCard(r.pe.sections));
+    const g2=$("div","grid side");
+    g2.appendChild(capCard(r.capabilities,r.findings));
+    g2.appendChild(uebaCard(r.ueba));
+    app.appendChild(g2);
+    app.appendChild(attackCard(r.attack));
+  }
+  app.appendChild(iocCard(r.embedded,r.hints));
+}
+render();
+</script>
+</body>
+</html>

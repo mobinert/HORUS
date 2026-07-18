@@ -1,3 +1,44 @@
+## Horus v3.0.0
+
+Same engine, three ways to run it, and a GUI that finally does the analysis justice.
+
+### The glass console (GUI)
+
+- A self-contained **glassmorphism** report — frosted cards, a glowing risk ring, an
+  animated **threat graph** wiring the sample to its capabilities, ATT&CK techniques
+  and embedded IOCs, plus a **MITRE ATT&CK heatmap** that lights up what it found.
+- Everything is inline HTML/CSS/JS — no CDN, no WebView runtime, nothing leaves the
+  box. It renders in the browser the machine already trusts.
+- Three ways in: `horus-gui.exe` (drag a file on it), `horus --gui`, or
+  `horus --html report.html` to export a shareable report.
+
+### Three binaries from one core
+
+- `horus-cli.exe` — the pure command line, zero third-party dependencies.
+- `horus-gui.exe` — the GUI build.
+- `horus.exe` — both; CLI by default, `--gui` opens the glass console.
+- Internally the analysis engine was split out of `main` into a shared core, so the
+  CLI, the GUI and the JSON all read from the exact same report — they can't drift.
+
+### New workflows
+
+- **`--scan <dir>`** — walk a folder, score everything, worst-first table, with
+  `--csv` / `--json-out` exports.
+- **`--diff a.exe b.exe`** — imphash, rich-hash, section-entropy drift and TLSH
+  distance side by side.
+- **`--clip`** — read the indicator straight off the clipboard.
+- **`~/.horus.json`** — keep API keys and a `cache_ttl_hours` in a dotfile; repeat
+  intel lookups are served from a local cache instead of burning quota.
+
+### Fewer false positives
+
+- Real version resource + application manifest on every binary, no packing, clean
+  imports. See `docs/false-positive-report.md` for the vendor whitelist notes.
+
+The `--json` contract from v2.1 is unchanged, so existing scripts keep working.
+
+---
+
 ## Horus v2.1.0
 
 ### What's new in v2.1
