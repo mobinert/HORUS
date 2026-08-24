@@ -41,6 +41,7 @@ struct Options {
     bool strings  = false;
     bool no_color = false;
     bool help     = false;
+    bool show_version = false;
     bool profile  = false;
 
     // folder and report modes

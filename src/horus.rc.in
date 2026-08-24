@@ -1,11 +1,9 @@
-// Version resource + manifest. Giving the binary real metadata is one of the
-// cheapest ways to stop AV/EDR heuristics treating an unsigned tool as suspect.
 #include <windows.h>
 
-1 RT_MANIFEST "horus.manifest"
+1 RT_MANIFEST "@HORUS_MANIFEST_PATH@"
 
-#define HORUS_VER 3,0,0,0
-#define HORUS_VER_STR "3.0.0.0"
+#define HORUS_VER @HORUS_VERSION_COMMA@
+#define HORUS_VER_STR "@HORUS_VERSION_QUAD@"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    HORUS_VER
@@ -21,11 +19,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "HORUS"
-            VALUE "FileDescription",  "IOC enrichment and PE static analysis"
+            VALUE "FileDescription",  "Persistent case analysis and Windows PE triage"
             VALUE "FileVersion",      HORUS_VER_STR
             VALUE "InternalName",     "horus"
-            VALUE "LegalCopyright",   "MIT License"
-            VALUE "OriginalFilename", "horus.exe"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Mobin Erteghaie"
+            VALUE "OriginalFilename", "@HORUS_ORIGINAL_FILENAME@"
             VALUE "ProductName",      "HORUS - the all-seeing eye"
             VALUE "ProductVersion",   HORUS_VER_STR
             VALUE "Comments",         "Open-source Windows security triage tool. https://github.com/mobinert/HORUS"

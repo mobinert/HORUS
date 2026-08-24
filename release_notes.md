@@ -1,3 +1,49 @@
+## Horus v4.0.0
+
+### Persistent cases
+
+- `horus --case <samples-dir>` creates or refreshes a portable workspace for up to
+  5,000 samples. Normal refreshes reuse unchanged analysis; `--verify` re-hashes,
+  `--rebuild` repeats analysis, and `--prune` removes missing-file history.
+- Every case writes `case.json`, `report.html`, `samples.csv`, `clusters.csv`, and
+  `iocs.csv`. Paths are relative, state is atomic, and API keys are never exported.
+- The offline report is searchable and covers verdicts, exact duplicates, similarity
+  clusters, extracted indicators, and ATT&CK techniques.
+
+### Explainable PE similarity
+
+- SHA-256 duplicate groups cover every file type.
+- Similarity clustering is limited to valid PEs and uses TLSH, imphash, Rich hash,
+  and section layout. Capabilities add context but cannot create a relationship.
+- `conservative`, `balanced`, and `broad` presets expose the tradeoff. Every member
+  must match the deterministic representative directly, preventing chaining.
+- Cluster IDs survive refreshes and deterministic split/merge handling. Results are
+  similarity clusters, not definitive malware-family labels.
+
+### Direct mode and safety
+
+- `horus.exe sample.exe` remains the immediate path; no case is created. Files are
+  detected from content, so missing or unusual extensions and drag-and-drop work.
+- Non-PE inventory now reports `UNKNOWN` with a nullable score instead of a false
+  `CLEAN`. Exit code 3 identifies unknown, skipped, or incomplete analysis.
+- Network access is opt-in. `--enrich` sends hashes and extracted indicators only;
+  sample bytes are never uploaded. Authenticode is offline/cache-only unless
+  `--online-trust` is supplied.
+- Reports use Base64 data embedding and safe DOM construction. JSON parsing is strict
+  and depth-limited, HTTP responses stop at 16 MiB, outputs are atomic, and CSV cells
+  are protected from formula execution.
+
+### Release
+
+- Official target: Windows 10/11 x64.
+- All three executables take version 4.0.0 from the CMake project version and carry
+  matching file, product, and manifest metadata.
+- GitHub Actions builds and tests the tag, publishes SHA-256 checksums, and creates
+  artifact attestations for every release file. The binaries remain Authenticode-
+  unsigned until a code-signing certificate is available.
+
+---
+
 ## Horus v3.0.0
 
 Same engine, three ways to run it, and a GUI that finally does the analysis justice.
@@ -7,8 +53,8 @@ Same engine, three ways to run it, and a GUI that finally does the analysis just
 - A self-contained **glassmorphism** report — frosted cards, a glowing risk ring, an
   animated **threat graph** wiring the sample to its capabilities, ATT&CK techniques
   and embedded IOCs, plus a **MITRE ATT&CK heatmap** that lights up what it found.
-- Everything is inline HTML/CSS/JS — no CDN, no WebView runtime, nothing leaves the
-  box. It renders in the browser the machine already trusts.
+- Everything is inline HTML/CSS/JS — no CDN or WebView runtime. It renders in the
+  browser the machine already trusts; live enrichment remains opt-in.
 - Three ways in: `horus-gui.exe` (drag a file on it), `horus --gui`, or
   `horus --html report.html` to export a shareable report.
 
@@ -47,7 +93,7 @@ The `--json` contract from v2.1 is unchanged, so existing scripts keep working.
 - **TLSH** (Trend Micro Locality Sensitive Hash) and **ssdeep** digests, computed
   straight off the file bytes. Both are byte-for-byte compatible with the
   reference tools — verified against libtlsh and ssdeep on real Windows binaries.
-- TLSH turns "score one file" into "recognise the family": identical files score
+- TLSH turns "score one file" into comparing related samples: identical files score
   0, a few edits stay a couple of units apart, unrelated files sit hundreds apart.
 - **authentihash** (the PE hash the Authenticode signature covers) — lets you
   match signed-malware campaigns even when the payload bytes differ.
@@ -138,7 +184,7 @@ horus suspicious.exe --json          # same, machine-readable
 
 ### Requirements
 
-- Windows 7 x64 or later
+- Windows 10/11 x64
 - No runtime install needed
 
 ### Quick start
@@ -149,7 +195,7 @@ horus suspicious.exe --profile
 horus AutoHotkey_2.0.26_setup.exe
 horus 185.220.101.5
 horus 44d88612fea8a8f36de82e1278abb02f
-horus malware.exe --vt-key $env:VT_API_KEY --json
+horus malware.exe --enrich --vt-key $env:VT_API_KEY --json
 ```
 
 ---

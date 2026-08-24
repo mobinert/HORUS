@@ -1,0 +1,13 @@
+#pragma once
+
+namespace horus {
+namespace version {
+
+inline constexpr const char* kString = "@PROJECT_VERSION@";
+inline constexpr const wchar_t* kWide = L"@PROJECT_VERSION@";
+inline constexpr int kMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr int kMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr int kPatch = @PROJECT_VERSION_PATCH@;
+
+} // namespace version
+} // namespace horus

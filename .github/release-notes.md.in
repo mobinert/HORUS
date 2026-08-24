@@ -1,0 +1,13 @@
+Horus v@PROJECT_VERSION@ adds persistent case analysis without changing the direct workflow: dropping a file onto the executable or running `horus.exe sample.exe` still analyzes it immediately.
+
+Highlights:
+
+- Persistent Case Mode for up to 5,000 samples, with incremental refresh, verify, rebuild, prune, portable state, and offline HTML/CSV/JSON reports.
+- Exact duplicate groups for every file and explainable PE similarity clusters based on TLSH, imphash, Rich hash, and section layout.
+- Content-based direct analysis for files with any extension, including drag-and-drop and paths with spaces.
+- Explicit `UNKNOWN` and `analysis_status` output when evidence is unavailable, plus documented exit code 3 for incomplete results.
+- Opt-in network enrichment with `--enrich`; only hashes and extracted indicators are sent, never file contents.
+- Offline/cache-only Authenticode trust by default, with online revocation available through `--online-trust`.
+- Hardened report embedding, strict JSON parsing, bounded HTTP responses, atomic state/export writes, and CSV formula protection.
+
+The three binaries target Windows 10/11 x64. They are not Authenticode-signed; verify downloads with `SHA256SUMS.txt` and GitHub artifact attestations.

@@ -16,6 +16,7 @@
 #include "batch.hpp"
 #include "case.hpp"
 #include "console.hpp"
+#include "version.hpp"
 
 #include <iostream>
 #include <cerrno>
@@ -27,7 +28,7 @@ namespace cli {
 
 inline void usage() {
     std::cout <<
-    "HORUS v3.0 - PE analysis, similarity hashing (TLSH/ssdeep), ATT&CK + GUI\n\n"
+    "HORUS v" << version::kString << " - persistent cases, PE analysis, similarity hashing + GUI\n\n"
     "usage: horus <indicator-or-file> [options]\n"
     "       horus --case <dir> [--case-out dir] [--gui]\n"
     "       horus --scan <dir> [--csv f] [--json-out f]\n"
@@ -43,14 +44,15 @@ inline void usage() {
     "  --rebuild             ignore cached analysis and rebuild the case\n"
     "  --prune               drop missing files from case history\n"
     "  --enrich              query configured providers; files are never uploaded\n"
-    "  --max-lookups <n>     live case lookup cap (default: 100)\n"
+    "  --max-lookups <n>     live lookup cap (default: 100)\n"
     "  --max-file-mb <n>     per-file analysis limit (default: 512)\n"
     "  --online-trust        allow online Authenticode revocation checks\n"
     "  --scan <dir>          triage every file in a folder, worst-first\n"
     "  --diff <a> <b>        compare two PEs (imphash / TLSH / sections)\n"
     "  --clip                read the indicator from the clipboard\n"
+    "  --gui                 open the generated report in the browser\n"
     "  --html <file>         write the glass-console report to an HTML file\n"
-    "  --no-recurse          with --scan, stay in the top folder only\n"
+    "  --no-recurse          with --case/--scan, stay in the top folder only\n"
     "  --csv <file>          with --scan, also write a CSV\n"
     "  --json-out <file>     with --scan, also write a JSON array\n"
     "  --cache-ttl <hours>   cache intel lookups for N hours (0 = off)\n"
@@ -60,13 +62,14 @@ inline void usage() {
     "  --profile             verbose UEBA signal breakdown\n"
     "  --json                machine-readable JSON output\n"
     "  --no-color            disable ANSI colour\n"
-    "  -h, --help            this help\n\n"
+    "  -h, --help            this help\n"
+    "  --version             print the version\n\n"
     "examples:\n"
     "  horus suspicious.exe\n"
     "  horus --scan .\\samples --csv out.csv\n"
     "  horus --diff a.exe b.exe\n"
-    "  horus 44d88612fea8a8f36de82e1278abb02f --cache-ttl 24\n"
-    "  horus 185.220.101.5 --abuse-key $env:ABUSEIPDB_API_KEY\n";
+    "  horus 44d88612fea8a8f36de82e1278abb02f --enrich --cache-ttl 24\n"
+    "  horus 185.220.101.5 --enrich --abuse-key $env:ABUSEIPDB_API_KEY\n";
 }
 
 [[noreturn]] inline void argument_error(const std::string& message) {
@@ -97,6 +100,7 @@ inline core::Options parse_args(int argc, char** argv) {
             return argv[++i];
         };
         if      (a == "-h" || a == "--help") o.help = true;
+        else if (a == "--version")           o.show_version = true;
         else if (a == "--json")              o.json = true;
         else if (a == "--strings")           o.strings = true;
         else if (a == "--no-color")          o.no_color = true;
@@ -154,6 +158,7 @@ inline int run(const core::Options& in) {
     if (opts.no_color) ui::color_enabled() = false;
 
     if (opts.help) { ui::banner(); usage(); return 0; }
+    if (opts.show_version) { std::cout << version::kString << "\n"; return 0; }
 
     // sub-commands first
     if (!opts.diff_a.empty()) {

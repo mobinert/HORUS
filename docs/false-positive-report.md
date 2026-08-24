@@ -1,7 +1,8 @@
 # Horus — false-positive notes for AV / EDR vendors
 
 Horus is an **open-source (MIT) Windows security-triage tool**. It is read-only:
-it hashes files, parses PE headers, and queries public reputation APIs. It never
+it hashes files, parses PE headers, and can query public reputation APIs when
+`--enrich` is explicitly supplied. It never
 injects, persists, drops, or executes anything. Source is public at
 <https://github.com/mobinert/HORUS>.
 
@@ -22,9 +23,10 @@ false positive. This note is here to make a whitelist request quick.
 
 - **No packing / no obfuscation** of the binary itself (packing raises detection).
 - **No RWX sections, no runtime API resolution** of sensitive calls.
-- A real **version resource + application manifest** on every binary (`horus.rc`,
-  `horus.manifest`) so it doesn't look like an anonymous unsigned blob.
-- Releases are built from the tagged source with MSVC `/O2` — reproducible.
+- A real **version resource + application manifest** on every binary, generated
+  from `horus.rc.in`, `horus.manifest.in`, and the CMake project version.
+- Releases are built and tested from the tagged source with MSVC `/O2`; checksums
+  and GitHub artifact attestations make the release provenance verifiable.
 
 ## Submitting a false-positive / whitelist request
 

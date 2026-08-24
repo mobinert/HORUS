@@ -7,6 +7,8 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <windows.h>
+#include <psapi.h>
 
 using namespace horus;
 namespace fs = std::filesystem;
@@ -57,6 +59,8 @@ int main(int argc, char** argv) {
     opts.case_dir = samples.string();
     opts.case_out = workspace.string();
     opts.case_name = "lab </script><script>alert(1)</script>";
+    opts.vt_key = "vt-secret-for-export-test";
+    opts.abuse_key = "abuse-secret-for-export-test";
 
     casework::RunResult first;
     std::string error;
@@ -69,14 +73,58 @@ int main(int argc, char** argv) {
     CHECK(find_sample(first, "text sample.txt") != nullptr);
     CHECK(find_sample(first, "text sample.txt")->status == "unknown");
     CHECK(first.public_json.find(samples.string()) == std::string::npos);
+    CHECK(first.public_json.find(opts.vt_key) == std::string::npos);
+    CHECK(first.public_json.find(opts.abuse_key) == std::string::npos);
     CHECK(first.public_json.find("malware_family") == std::string::npos);
     CHECK(json::parse(first.public_json)["schema"].as_string() == "horus-case/v1");
 
     const std::string payload = "</script><script>alert(1)</script>";
     std::string report = read_text(workspace / "report.html");
+    std::string state = read_text(workspace / ".horus" / "state.json");
     CHECK(report.find(payload) == std::string::npos);
     CHECK(report.find("__HORUS_CASE_B64__") == std::string::npos);
+    CHECK(report.find(opts.vt_key) == std::string::npos);
+    CHECK(state.find(samples.string()) == std::string::npos);
+    CHECK(state.find(opts.vt_key) == std::string::npos);
     CHECK(read_text(workspace / "samples.csv").find("'=formula.txt") != std::string::npos);
+
+    casework::RunResult hostile_csv;
+    casework::Sample hostile_sample;
+    hostile_sample.path = "safe";
+    hostile_sample.sha256 = "=sha";
+    hostile_sample.status = "+status";
+    hostile_sample.verdict = "@verdict";
+    hostile_sample.duplicate_id = "-duplicate";
+    hostile_sample.cluster_id = "\tcluster";
+    hostile_csv.state.samples.push_back(hostile_sample);
+    casework::Cluster hostile_cluster;
+    hostile_cluster.id = "=cluster";
+    hostile_cluster.representative = "+representative";
+    casework::ClusterMember hostile_member;
+    hostile_member.sha256 = "-member";
+    hostile_member.evidence = {"@evidence"};
+    hostile_cluster.members.push_back(hostile_member);
+    hostile_csv.clusters.push_back(hostile_cluster);
+    casework::IocRecord hostile_ioc;
+    hostile_ioc.type = "=type";
+    hostile_ioc.value = "+value";
+    hostile_ioc.paths = {"-path"};
+    hostile_ioc.lookup_status = "@lookup";
+    hostile_ioc.summary = "\tsummary";
+    hostile_csv.iocs.push_back(hostile_ioc);
+    const std::string hostile_samples = casework::samples_csv(hostile_csv);
+    const std::string hostile_clusters = casework::clusters_csv(hostile_csv);
+    const std::string hostile_iocs = casework::iocs_csv(hostile_csv);
+    CHECK(hostile_samples.find("'=sha") != std::string::npos);
+    CHECK(hostile_samples.find("'+status") != std::string::npos);
+    CHECK(hostile_samples.find("'@verdict") != std::string::npos);
+    CHECK(hostile_samples.find("'-duplicate") != std::string::npos);
+    CHECK(hostile_clusters.find("'=cluster") != std::string::npos);
+    CHECK(hostile_clusters.find("'+representative") != std::string::npos);
+    CHECK(hostile_clusters.find("'-member") != std::string::npos);
+    CHECK(hostile_iocs.find("'=type") != std::string::npos);
+    CHECK(hostile_iocs.find("'+value") != std::string::npos);
+    CHECK(hostile_iocs.find("'@lookup") != std::string::npos);
 
     std::string case_id = first.state.id;
     std::string cluster_id = first.clusters.empty() ? "" : first.clusters[0].id;
@@ -132,6 +180,41 @@ int main(int argc, char** argv) {
     casework::RunResult pruned;
     CHECK(casework::build(prune, pruned, error));
     CHECK(find_sample(pruned, "text sample.txt") == nullptr);
+
+    fs::create_directories(samples / "nested", ec);
+    CHECK(!ec);
+    { std::ofstream f(samples / "nested" / "inside.txt", std::ios::binary); f << "nested"; }
+    core::Options flat = opts;
+    flat.case_out = (root / "flat-workspace").string();
+    flat.recurse = false;
+    casework::RunResult flat_run;
+    CHECK(casework::build(flat, flat_run, error));
+    CHECK(find_sample(flat_run, "nested/inside.txt") == nullptr);
+
+    core::Options recursive = opts;
+    recursive.case_out = (root / "recursive-workspace").string();
+    casework::RunResult recursive_run;
+    CHECK(casework::build(recursive, recursive_run, error));
+    CHECK(find_sample(recursive_run, "nested/inside.txt") != nullptr);
+
+    fs::path parent_case = root / "parent-case";
+    fs::path child_samples = parent_case / "samples";
+    fs::create_directories(child_samples, ec);
+    CHECK(!ec);
+    { std::ofstream f(child_samples / "one.txt", std::ios::binary); f << "one"; }
+    core::Options parent_workspace;
+    parent_workspace.case_dir = child_samples.string();
+    parent_workspace.case_out = parent_case.string();
+    casework::RunResult parent_run;
+    CHECK(casework::build(parent_workspace, parent_run, error));
+    CHECK(parent_run.state.samples.size() == 1);
+
+    core::Options same_workspace;
+    same_workspace.case_dir = child_samples.string();
+    same_workspace.case_out = child_samples.string();
+    casework::RunResult rejected_workspace;
+    CHECK(!casework::build(same_workspace, rejected_workspace, error));
+    CHECK(error.find("workspace must be separate") != std::string::npos);
 
     auto make_pair = [&](const std::string& mode, const std::string& imp_b,
                          const std::string& rich_b, const std::string& sections_b) {
@@ -204,6 +287,10 @@ int main(int argc, char** argv) {
     auto elapsed = std::chrono::steady_clock::now() - started;
     CHECK(clusters.size() == 100);
     CHECK(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() < 30);
+    PROCESS_MEMORY_COUNTERS memory{};
+    memory.cb = sizeof(memory);
+    CHECK(GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)) != 0);
+    CHECK(memory.PeakWorkingSetSize < 1024ULL * 1024ULL * 1024ULL);
 
     fs::remove_all(root, ec);
     if (failures) std::cout << "test_case FAILED\n";

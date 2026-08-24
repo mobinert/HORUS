@@ -5,6 +5,8 @@
 // ---------------------------------------------------------------------------
 #pragma once
 
+#include "version.hpp"
+
 #include <string>
 #include <iostream>
 #include <vector>
@@ -57,7 +59,8 @@ inline void banner() {
         " |  _  | |_| |  _ <| |_| |___) |\n"
         " |_| |_|\\___/|_| \\_\\\\___/|____/\n";
     std::cout << ansi::cyan(art);
-    std::cout << ansi::grey("  \xF0\x9F\x94\xB1 the all-seeing eye  v3.0  -  PE analysis, similarity hashing, ATT&CK & glass GUI\n\n");
+    std::cout << ansi::grey(std::string("  \xF0\x9F\x94\xB1 the all-seeing eye  v") +
+                            version::kString + "  -  persistent cases, PE analysis & explainable similarity\n\n");
 }
 
 inline std::string rule(char c = '-', int width = 64) {

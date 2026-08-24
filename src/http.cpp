@@ -2,6 +2,7 @@
 //  http.cpp  -  WinHTTP implementation
 // ---------------------------------------------------------------------------
 #include "http.hpp"
+#include "version.hpp"
 
 #include <windows.h>
 #include <winhttp.h>
@@ -43,7 +44,9 @@ std::string last_error(const char* stage) {
 Response perform(const Request& req) {
     Response resp;
 
-    WinHttpHandle session(WinHttpOpen(L"HORUS/4.0",
+    std::wstring user_agent = L"HORUS/";
+    user_agent += version::kWide;
+    WinHttpHandle session(WinHttpOpen(user_agent.c_str(),
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0));

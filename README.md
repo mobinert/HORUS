@@ -50,26 +50,36 @@ Hand it **anything** and it figures out what to do:
 
 | You give it | What Horus does |
 |---|---|
-| A file path | Hashes it (MD5/SHA-1/SHA-256 + TLSH/ssdeep/authentihash/rich), parses the PE, verifies its signature, maps capabilities to ATT&CK, scores risk, pivots on embedded indicators |
-| An MD5, SHA-1, or SHA-256 | Queries VirusTotal, reports detections |
-| An IPv4 address | Queries VirusTotal + AbuseIPDB in parallel |
-| A domain name | Queries VirusTotal, reports category and reputation |
-| A URL | Queries VirusTotal, reports verdicts |
-| An email address | Queries VirusTotal |
+| A file path | Hashes and inventories any file; valid PEs also get parsing, signature checks, capabilities, ATT&CK, UEBA, and a scored verdict |
+| An MD5, SHA-1, or SHA-256 | Classifies it locally; `--enrich` queries VirusTotal |
+| An IP address | Classifies it locally; `--enrich` queries VirusTotal + AbuseIPDB in parallel |
+| A domain or URL | Classifies it locally; `--enrich` queries VirusTotal |
+| An email address | Recognises the indicator and reports `UNKNOWN` unless a configured provider supports it |
+| A samples directory | `--case` creates or refreshes a persistent, portable analysis workspace |
 
-No flags needed. `horus <thing>` is all it takes.
+Direct file analysis needs no mode flag: `horus.exe sample.exe` runs immediately. Network access is always opt-in through `--enrich`.
+
+### New in v4.0
+
+- **Persistent Case Mode** — analyze up to 5,000 files with incremental refresh, `--verify`, `--rebuild`, `--prune`, portable relative paths, and atomic state.
+- **Explainable similarity clusters** — exact SHA-256 duplicates for every file; valid PEs can be related by TLSH, imphash, Rich hash, and section layout. Results are similarity clusters, not definitive malware-family attribution.
+- **Offline case dashboard** — searchable HTML plus `case.json`, `samples.csv`, `clusters.csv`, and `iocs.csv`; no server or CDN is required.
+- **Safer verdict semantics** — non-PE inventory and incomplete analysis now return `UNKNOWN` with a nullable score instead of a false `CLEAN`.
+- **Opt-in enrichment** — only hashes and extracted indicators are sent when `--enrich` is present. Samples are never uploaded.
+- **Hardened I/O** — Base64 report embedding, safe DOM rendering, strict JSON parsing, 16 MiB HTTP responses, atomic writes, and CSV formula protection.
+- **Windows 10/11 x64 release checks** — centralized version metadata, SHA-256 checksums, and GitHub artifact attestations for all release assets.
 
 ### New in v3.0
 
-- **Glass console (GUI)** — a self-contained, glassmorphism report that renders in the browser: a risk ring, a live force-directed **threat graph** (sample → capabilities → ATT&CK → embedded IOCs), and a **MITRE ATT&CK heatmap** that lights up the techniques it found. No CDN, no runtime, nothing leaves the machine. `horus-gui.exe`, `horus --gui`, or `horus --html report.html` to export one.
+- **Glass console (GUI)** — a self-contained, glassmorphism report that renders in the browser: a risk ring, a live force-directed **threat graph** (sample → capabilities → ATT&CK → embedded IOCs), and a **MITRE ATT&CK heatmap** that lights up the techniques it found. No CDN or browser runtime dependency; network enrichment remains opt-in. `horus-gui.exe`, `horus --gui`, or `horus --html report.html` to export one.
 - **Batch / folder scan** — `horus --scan <dir>` walks a directory, scores every file, prints a worst-first table, and dumps `--csv` / `--json-out` for a ticket.
-- **PE diff** — `horus --diff a.exe b.exe`: imphash, rich-hash, section-entropy drift, and TLSH distance side by side. "Same family?" without uploading a thing.
+- **PE diff** — `horus --diff a.exe b.exe`: imphash, rich-hash, section-entropy drift, and TLSH distance side by side. Compare related samples without uploading either file.
 - **Config file + intel cache** — drop keys and a `cache_ttl_hours` in `~/.horus.json`; repeat VT/AbuseIPDB lookups come back instantly and don't burn quota.
 - **Clipboard input** — `horus --clip` grabs whatever indicator you already copied.
 
 ### New in v2.1
 
-- **Similarity hashing** — **TLSH** and **ssdeep** digests (byte-for-byte compatible with the reference tools), so you can cluster a sample against a family instead of only scoring it in isolation. Plus the **authentihash** (matches signed-malware campaigns) and the **rich hash** (MSVC build fingerprint).
+- **Similarity hashing** — **TLSH** and **ssdeep** digests (byte-for-byte compatible with the reference tools), so you can compare related samples instead of only scoring them in isolation. Plus the **authentihash** (matches signed-malware campaigns) and the **rich hash** (MSVC build fingerprint).
 - **Real Authenticode verification** — not just "a certificate is present." Runs the signature through `WinVerifyTrust` (embedded **and** catalog), pulls the signer's common name out of the PKCS#7, and flags anything that carries a certificate but no longer verifies as a tamper/forgery signal.
 - **MITRE ATT&CK mapping** — every capability finding is tagged with its technique ID (`T1055`, `T1056.001`, `T1071`…) in both the console report and the JSON.
 - **More of the PE** — Rich header decode, CodeView **PDB path** + GUID (attribution goldmine), **TLS callbacks**, exports, appended **overlay** (size + entropy), and **.NET/CLR** detection.
@@ -86,7 +96,7 @@ No flags needed. `horus <thing>` is all it takes.
  |_| |_|\___/|_| \_\\___/|____/
   🔱 the all-seeing eye  —  IOC enrichment & PE static analysis
 
-$ horus ransomware_sample.exe
+$ horus ransomware_sample.exe --enrich
 
 FILE ────────────────────────────────────────────────────────────
   path              ransomware_sample.exe
@@ -137,7 +147,7 @@ EMBEDDED INDICATORS  (from strings) ──────────────�
   ip     185.220.101.5
   tokens  cmd.exe  schtasks  powershell
 
-VIRUSTOTAL ──────────────────────────────────────────────────────
+THREAT INTELLIGENCE ─────────────────────────────────────────────
   VirusTotal  61/72 — Ransom.FileCryptor.Generic (Malicious)
 
 VERDICT ─────────────────────────────────────────────────────────
@@ -186,6 +196,7 @@ Common dual-use APIs (`LoadLibrary`, `CreateProcess`, `GetProcAddress`) are show
 | 10–29 | **LOW RISK** | Suspicious imports but no strong signals |
 | 30–59 | **SUSPICIOUS** | Multiple concerning capabilities or combos |
 | 60–100 | **LIKELY MALICIOUS** | Strong evidence of malicious intent |
+| — | **UNKNOWN** | No scoreable evidence, or analysis was skipped/incomplete |
 
 ---
 
@@ -202,7 +213,7 @@ Grab `horus.exe` from [**Releases**](https://github.com/mobinert/HORUS/releases/
 
 ### 2. Set API Keys (optional but recommended)
 
-Horus works without keys — it still does full static PE analysis and hashing. Keys unlock the live threat-intel lookups.
+Horus works without keys — it still does full local PE analysis and hashing. Keys configure providers; `--enrich` explicitly enables live lookups for that run.
 
 ```powershell
 # Set for this session
@@ -224,10 +235,23 @@ Free API keys:
 
 ```
 horus <indicator-or-file> [options]
+horus --case <samples-dir> [case options]
 
   <indicator-or-file>   anything: a file path, hash, IP, domain, URL, or email
 
 options:
+  --case <dir>          create or refresh a persistent analysis case
+  --case-out <dir>      workspace (default: <dir>.horus-case)
+  --case-name <name>    analyst-facing case name
+  --cluster-mode <m>    conservative, balanced, or broad
+  --verify              re-hash cached case files before reuse
+  --rebuild             repeat all case analysis
+  --prune               remove missing files from case history
+  --enrich              query configured providers; files are never uploaded
+  --max-lookups <n>     live lookup cap (default: 100)
+  --max-file-mb <n>     per-file limit (default: 512 MiB)
+  --no-recurse          analyze only the top level of a case directory
+  --online-trust        allow online Authenticode revocation checks
   --scan <dir>          triage every file in a folder, worst-first
   --diff <a> <b>        compare two PEs (imphash / TLSH / section entropy)
   --clip                read the indicator from the clipboard
@@ -243,6 +267,7 @@ options:
   --json                machine-readable JSON output (exit code 1 = suspicious/malicious)
   --no-color            disable ANSI colour (auto-disabled when piped)
   -h, --help            show this help
+  --version             print the version
 ```
 
 A `~/.horus.json` is read if present, so you don't paste keys every run:
@@ -257,8 +282,8 @@ A `~/.horus.json` is read if present, so you don't paste keys every run:
 :: Static analysis of a suspicious binary (PE parser + entropy + capabilities)
 horus C:\Samples\malware.exe
 
-:: Same, plus VirusTotal file reputation by SHA-256
-horus C:\Samples\malware.exe --vt-key %VT_API_KEY%
+:: Same, plus hash and embedded-IOC reputation
+horus C:\Samples\malware.exe --enrich --vt-key %VT_API_KEY%
 
 :: Analyze and dump its full string table
 horus C:\Samples\dropper.dll --strings
@@ -270,31 +295,46 @@ horus C:\Samples\payload.bin --json
 horus suspicious.exe --json | jq .verdict
 ```
 
+### Persistent Case Mode
+
+```powershell
+# Creates C:\Cases\incoming.horus-case and recursively analyzes up to 5,000 files
+horus.exe --case C:\Cases\incoming
+
+# Re-check every cached hash, enable provider lookups, and open the offline dashboard
+horus.exe --case C:\Cases\incoming --verify --enrich --gui
+
+# Rebuild all analysis with the strictest similarity preset
+horus.exe --case C:\Cases\incoming --rebuild --cluster-mode conservative
+```
+
+Each workspace contains private state under `.horus` and portable exports named `case.json`, `report.html`, `samples.csv`, `clusters.csv`, and `iocs.csv`. Stored paths are relative to the samples directory.
+
 ### IOC Lookup Examples
 
 ```bat
 :: MD5, SHA-1, or SHA-256 hash — Horus auto-detects the type
-horus 44d88612fea8a8f36de82e1278abb02f
-horus 3395856ce81f2b7382dee72602f798b642f14d0
-horus 275a021bbfb6489e54d471899f7db9d1663fc695b2cfad87ef3ef...
+horus 44d88612fea8a8f36de82e1278abb02f --enrich
+horus 3395856ce81f2b7382dee72602f798b642f14d0 --enrich
+horus 275a021bbfb6489e54d471899f7db9d1663fc695b2cfad87ef3ef... --enrich
 
 :: IP reputation from VirusTotal + AbuseIPDB simultaneously
-horus 185.220.101.5
+horus 185.220.101.5 --enrich
 
 :: Domain reputation
-horus evil-c2-domain.ru
+horus evil-c2-domain.ru --enrich
 
 :: Full URL
-horus https://sketchy.example/drop.bin
+horus https://sketchy.example/drop.bin --enrich
 
 :: Email address
-horus attacker@phishing-domain.com
+horus attacker@phishing-domain.com --enrich
 
 :: Combine keys inline instead of via env vars
-horus 1.2.3.4 --vt-key abc123 --abuse-key def456
+horus 1.2.3.4 --enrich --vt-key abc123 --abuse-key def456
 
 :: JSON output for automation
-horus 185.220.101.5 --json
+horus 185.220.101.5 --enrich --json
 ```
 
 ### Scripting / Automation
@@ -303,9 +343,10 @@ Exit codes make Horus useful in pipelines:
 
 | Exit code | Meaning |
 |---|---|
-| `0` | Clean / unknown — nothing suspicious found |
+| `0` | Analysis completed and no score reached 30 |
 | `1` | Suspicious or malicious — score ≥ 30 |
-| `2` | Usage error or file not found |
+| `2` | Fatal error, usage error, or output failure |
+| `3` | `UNKNOWN`, skipped, or otherwise incomplete, with no score ≥ 30 |
 
 ```powershell
 # Block a file from being used if Horus flags it
@@ -327,6 +368,7 @@ Get-ChildItem C:\Quarantine\*.exe | ForEach-Object {
 ```json
 {
   "target":       "malware.exe",
+  "analysis_status": "complete",
   "size":          102912,
   "md5":          "a3f5d1e2c7b849d60e14a2b8f93c5d17",
   "sha1":         "4b2e8a91c3d056f7e820b4a19c6d3f7e2b085c40",
@@ -341,6 +383,8 @@ Get-ChildItem C:\Quarantine\*.exe | ForEach-Object {
 }
 ```
 
+For a non-PE file with no provider evidence, `analysis_status` is `unknown`, `final_score` is `null`, and `verdict` is `UNKNOWN`.
+
 ---
 
 ## Architecture
@@ -351,7 +395,11 @@ No external libraries. No runtime dependencies. Everything in one `.exe`.
 horus/
 │
 ├── src/
-│   ├── main.cpp          CLI entry point + orchestration + report rendering
+│   ├── main.cpp          unified CLI/GUI entry point
+│   ├── core.hpp          shared direct-analysis pipeline and report models
+│   ├── case.hpp          persistent case refresh and enrichment workflow
+│   ├── cluster.hpp       duplicate grouping and explainable PE similarity
+│   ├── case_io.hpp       portable case state and HTML/CSV/JSON exports
 │   ├── pe.hpp            PE32 / PE32+ parser — every field bounds-checked
 │   ├── signatures.hpp    110-API knowledge base + capability scoring engine
 │   ├── attack.hpp        capability → MITRE ATT&CK technique mapping
@@ -363,6 +411,7 @@ horus/
 │   ├── crypto.cpp/hpp    MD5 / SHA-1 / SHA-256 / authentihash via BCrypt/CNG
 │   ├── http.cpp/hpp      HTTPS client via Windows WinHTTP
 │   ├── intel.cpp/hpp     VirusTotal v3 + AbuseIPDB v2 (extensible interface)
+│   ├── output.hpp        atomic files and CSV cell hardening
 │   └── console.hpp       ANSI colour / formatted terminal output
 │
 ├── tests/
@@ -370,7 +419,9 @@ horus/
 │   ├── test_json.cpp     JSON parser unit tests
 │   ├── test_pe.cpp       PE parser unit tests
 │   ├── test_fuzzy.cpp    TLSH / ssdeep unit tests
-│   └── test_score.cpp    risk scoring engine unit tests
+│   ├── test_score.cpp    risk scoring engine unit tests
+│   ├── test_case.cpp     refresh, duplicate, clustering, and 5,000-record benchmark
+│   └── direct_smoke.ps1  process-level direct mode and exit-code checks
 │
 ├── CMakeLists.txt        CMake build (MSVC or MinGW-w64)
 └── LICENSE
@@ -380,6 +431,8 @@ horus/
 
 ```
 horus <argument>
+       │
+       ├─ --case? ──YES──► refresh persistent workspace + cluster + export
        │
        ├─ file_exists(arg)? ──YES──► analyze_file()
        │                                │
@@ -392,11 +445,11 @@ horus <argument>
        │                                │     └─ build imphash string
        │                                ├─ sig::score()    ← capability engine
        │                                ├─ extract_strings() → scan_strings()
-       │                                └─ VirusTotal lookup (if key set)
+       │                                └─ hash / IOC lookup (only with --enrich)
        │
        └─ NO ──► classify(arg)
                      │
-                     └─► intel::enrich()  ← parallel fan-out
+                     └─► intel::enrich()  ← only with --enrich; parallel fan-out
                                ├─ VirusTotal::lookup()   (if supported + key)
                                └─ AbuseIPDB::lookup()    (if supported + key)
 ```
@@ -431,38 +484,16 @@ Candidate sources to add: URLhaus · OTX (AlienVault) · GreyNoise · Shodan · 
 
 ## Building from Source
 
-**Requirements:** Windows, Visual Studio 2019 or later (free Community edition works)
+**Requirements:** Windows 10/11 x64, Visual Studio 2022 with the Desktop C++ workload, and CMake 3.15 or newer.
 
-### Option A — MSVC Developer Command Prompt
-
-Open **"x64 Native Tools Command Prompt for VS 2022"** (or 2019), then this builds
-the pure CLI (the GUI/unified builds embed the HTML page at configure time, so use
-CMake for those):
+### Build with CMake
 
 ```bat
 git clone https://github.com/mobinert/HORUS.git
 cd HORUS
-cl /EHsc /std:c++17 /O2 /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 ^
-   src\main_cli.cpp src\crypto.cpp src\http.cpp src\intel.cpp src\authenticode.cpp ^
-   /I src /Fe:horus-cli.exe bcrypt.lib winhttp.lib crypt32.lib wintrust.lib ole32.lib user32.lib
-```
-
-### Option B — CMake
-
-```bat
-git clone https://github.com/mobinert/HORUS.git
-cd HORUS
-cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
 cmake --build build --config Release
 :: binaries at build\Release\ :  horus-cli.exe  horus.exe  horus-gui.exe
-```
-
-### Option C — MinGW-w64 (MSYS2)
-
-```bash
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
-cmake -B build -G "MinGW Makefiles"
-cmake --build build
 ```
 
 ### Running the tests
@@ -475,22 +506,36 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Covers the indicator classifier, JSON parser, PE parser, scoring engine and the
-TLSH/ssdeep hashes. They're self-contained — no sample fixtures needed.
+Covers direct PE and non-PE analysis, paths with spaces, Case Mode refresh/rebuild/prune,
+all three clustering presets, stable split/merge IDs, the 5,000-record benchmark,
+report injection, strict JSON, bounded HTTP responses, atomic output, version metadata,
+and exit codes. Provider behavior uses an in-memory mock; the test suite never calls live services.
+
+### Verify a release download
+
+```powershell
+Get-FileHash .\horus.exe -Algorithm SHA256
+gh attestation verify .\horus.exe -R mobinert/HORUS
+```
+
+Compare the first command with `SHA256SUMS.txt`. Release binaries are currently
+Authenticode-unsigned, so Windows may still show a reputation warning; the checksum and
+GitHub attestation verify the file's integrity and build provenance.
 
 ---
 
 ## Imphash
 
-The imphash follows the Mandiant recipe: lowercase `dll.function` pairs (with extension stripped for `.dll`, `.ocx`, `.sys`), joined by commas in import order, then MD5'd. This matches what tools like `pefile` and `pe-sieve` produce, so you can cross-reference Horus results with existing malware family databases.
+The imphash follows the Mandiant recipe: lowercase `dll.function` pairs (with extension stripped for `.dll`, `.ocx`, `.sys`), joined by commas in import order, then MD5'd. This matches what tools like `pefile` and `pe-sieve` produce, so you can cross-reference Horus results with existing sample collections.
 
 ---
 
 ## Safety and Limitations
 
-- Horus is **read-only** — it never executes, modifies, or generates anything.
+- Horus never executes, copies, modifies, or uploads a sample. It only writes requested reports, case state, and local cache files.
 - The PE parser **bounds-checks every offset and length** before reading. Feeding it a malformed or malicious sample is safe.
-- The static risk score is a **triage aid**, not a production verdict. Pair it with VirusTotal consensus and, for anything that matters, a sandbox detonation.
+- Network access is off by default. `--enrich` sends only hashes and extracted indicators to configured providers; `--online-trust` separately enables online certificate revocation checks.
+- The static risk score is a **triage aid**, not a production verdict. Pair it with independent evidence and, for anything that matters, a controlled sandbox detonation.
 - Obfuscated samples that load all their imports at runtime will score low on static analysis — that's expected. The entropy and packing heuristics partially compensate, but there's no substitute for dynamic analysis on heavily obfuscated code.
 
 ---
