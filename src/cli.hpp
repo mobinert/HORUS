@@ -18,6 +18,8 @@
 #include "console.hpp"
 
 #include <iostream>
+#include <cerrno>
+#include <climits>
 #include <string>
 
 namespace horus {
@@ -67,6 +69,23 @@ inline void usage() {
     "  horus 185.220.101.5 --abuse-key $env:ABUSEIPDB_API_KEY\n";
 }
 
+[[noreturn]] inline void argument_error(const std::string& message) {
+    std::cerr << "error: " << message << "\n";
+    std::exit(2);
+}
+
+inline unsigned long long parse_uint(const std::string& text, const char* option,
+                                     unsigned long long min,
+                                     unsigned long long max) {
+    if (text.empty() || text[0] == '-') argument_error(std::string(option) + " needs a valid number");
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long value = std::strtoull(text.c_str(), &end, 10);
+    if (errno == ERANGE || !end || *end != '\0' || value < min || value > max)
+        argument_error(std::string(option) + " is outside the supported range");
+    return value;
+}
+
 inline core::Options parse_args(int argc, char** argv) {
     core::Options o;
     o.vt_key    = core::get_env("VT_API_KEY");
@@ -94,22 +113,35 @@ inline core::Options parse_args(int argc, char** argv) {
         else if (a == "--prune")             o.prune = true;
         else if (a == "--enrich")            o.enrich = true;
         else if (a == "--online-trust")      o.online_trust = true;
-        else if (a == "--max-lookups")       o.max_lookups = std::atoi(next("--max-lookups").c_str());
-        else if (a == "--max-file-mb")       o.max_file_mb = std::strtoull(next("--max-file-mb").c_str(), nullptr, 10);
+        else if (a == "--max-lookups")       o.max_lookups = static_cast<int>(parse_uint(next("--max-lookups"), "--max-lookups", 0, INT_MAX));
+        else if (a == "--max-file-mb")       o.max_file_mb = parse_uint(next("--max-file-mb"), "--max-file-mb", 1, 1048576);
         else if (a == "--scan")              o.scan_dir = next("--scan");
         else if (a == "--csv")               o.csv_out  = next("--csv");
         else if (a == "--json-out")          o.json_out = next("--json-out");
         else if (a == "--html")              o.html_out = next("--html");
-        else if (a == "--cache-ttl")         o.cache_ttl_hours = std::atoi(next("--cache-ttl").c_str());
+        else if (a == "--cache-ttl")       { o.cache_ttl_hours = static_cast<int>(parse_uint(next("--cache-ttl"), "--cache-ttl", 0, 87600)); o.cache_ttl_set = true; }
         else if (a == "--vt-key")            o.vt_key    = next("--vt-key");
         else if (a == "--abuse-key")         o.abuse_key = next("--abuse-key");
         else if (a == "--diff") {
             o.diff_a = next("--diff");
             o.diff_b = next("--diff");
         }
-        else if (!a.empty() && a[0] == '-')  { std::cerr << "unknown option: " << a << "\n"; std::exit(2); }
+        else if (!a.empty() && a[0] == '-')  argument_error("unknown option: " + a);
+        else if (!o.target.empty())           argument_error("multiple input targets were supplied");
         else                                  o.target = a;
     }
+
+    int modes = (!o.target.empty() || o.clip ? 1 : 0) + (!o.case_dir.empty() ? 1 : 0) +
+                (!o.scan_dir.empty() ? 1 : 0) + (!o.diff_a.empty() ? 1 : 0);
+    if (modes > 1) argument_error("choose one of direct input, --case, --scan, or --diff");
+    if (o.clip && !o.target.empty()) argument_error("--clip cannot be combined with a direct target");
+    if (o.verify && o.rebuild) argument_error("--verify and --rebuild cannot be used together");
+    if (o.case_dir.empty() && (!o.case_out.empty() || !o.case_name.empty() || o.verify || o.rebuild || o.prune))
+        argument_error("case options require --case");
+    if (o.scan_dir.empty() && (!o.csv_out.empty() || !o.json_out.empty()))
+        argument_error("--csv and --json-out require --scan");
+    if (!o.case_dir.empty() && !o.html_out.empty())
+        argument_error("Case Mode always writes report.html; --html is for direct input");
     return o;
 }
 
@@ -149,15 +181,21 @@ inline int run(const core::Options& in) {
     if (core::file_exists(opts.target)) {
         core::FileReport rep = core::analyze_file(opts);
         if (!rep.ok) { std::cerr << "error: " << rep.error << "\n"; return 2; }
-        if (opts.json) { std::cout << core::file_json(opts, rep); return rep.final_score >= 30 ? 1 : 0; }
+        if (opts.json) {
+            std::cout << core::file_json(opts, rep);
+            return core::analysis_exit_code(rep.analysis_status, rep.has_score, rep.final_score);
+        }
         return render::render_file(opts, rep);
     }
 
-    core::IndicatorReport rep = (opts.cache_ttl_hours > 0)
+    core::IndicatorReport rep = (opts.enrich && opts.cache_ttl_hours > 0)
                               ? cache::enrich_cached(opts)
                               : core::enrich_ioc(opts);
     if (!rep.ok) { std::cerr << "error: " << rep.error << "\n"; return 2; }
-    if (opts.json) { std::cout << core::indicator_json(rep); return rep.worst >= 30 ? 1 : 0; }
+    if (opts.json) {
+        std::cout << core::indicator_json(rep);
+        return core::analysis_exit_code(rep.analysis_status, rep.has_score, rep.worst);
+    }
     return render::render_indicator(opts, rep);
 }
 

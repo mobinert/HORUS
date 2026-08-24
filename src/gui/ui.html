@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"/>
 <title>HORUS — the all-seeing eye</title>
 <style>
 :root{
@@ -27,6 +28,7 @@ body{
 .aurora .b{width:46vw;height:46vw;right:-8vw;top:2vw;background:radial-gradient(circle,#00b3ff,transparent 60%);animation-delay:-6s}
 .aurora .c{width:40vw;height:40vw;left:24vw;bottom:-14vw;background:radial-gradient(circle,#00e5a8,transparent 60%);animation-delay:-12s}
 @keyframes drift{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(4vw,3vh) scale(1.08)}66%{transform:translate(-3vw,-2vh) scale(.96)}}
+@media(prefers-reduced-motion:reduce){.aurora span{animation:none}.att .cell{transition:none}}
 
 .wrap{max-width:1180px;margin:0 auto;padding:34px 26px 80px}
 header.top{display:flex;align-items:center;gap:16px;margin-bottom:26px}
@@ -123,11 +125,18 @@ header.top{display:flex;align-items:center;gap:16px;margin-bottom:26px}
     <div class="badge-ver">v3.0 · glass console</div>
   </header>
   <main id="app"></main>
-  <div class="foot">generated locally · no data left this machine</div>
+  <div class="foot">files stay local · network lookups are opt-in</div>
 </div>
 
 <script>
-const REPORT = /*__HORUS_REPORT__*/null;
+const REPORT_B64 = "__HORUS_REPORT_B64__";
+let REPORT = null;
+try {
+  const bytes = Uint8Array.from(atob(REPORT_B64), c => c.charCodeAt(0));
+  REPORT = JSON.parse(new TextDecoder().decode(bytes));
+} catch (err) {
+  REPORT = {kind:"error",error:"The embedded report could not be decoded."};
+}
 
 // technique universe Horus can map (from attack.hpp) — lit up when detected
 const ATTACK_UNIVERSE = [
@@ -139,24 +148,23 @@ const ATTACK_UNIVERSE = [
   ["T1486","Data Encrypted for Impact"],["T1041","Exfiltration Over C2"]
 ];
 
-const $=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+const $=(t,c,value)=>{const e=document.createElement(t);if(c)e.className=c;if(value!=null)e.textContent=String(value);return e;};
 function riskCol(s){return s>=60?"var(--red)":s>=30?"var(--amber)":s>=10?"var(--cyan)":"var(--green)";}
-function esc(s){return String(s==null?"":s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]));}
 
 function card(title,bodyNode){const c=$("div","card");if(title)c.appendChild($("h2",null,title));c.appendChild(bodyNode);return c;}
-function kv(pairs){const d=$("dl","kv");pairs.forEach(([k,v])=>{if(v==null||v==="")return;d.appendChild($("dt",null,esc(k)));const dd=$("dd","mono");dd.innerHTML=v;d.appendChild(dd);});return d;}
+function kv(pairs){const d=$("dl","kv");pairs.forEach(([k,v])=>{if(v==null||v==="")return;d.appendChild($("dt",null,k));d.appendChild($("dd","mono",v));});return d;}
 
 function hero(r){
-  const s=r.scores?r.scores.final:(r.worst||0), rc=riskCol(s);
+  const raw=r.scores?r.scores.final:r.worst, hasScore=Number.isFinite(raw), s=hasScore?raw:0, rc=hasScore?riskCol(s):"var(--faint)";
   const wrap=$("div","hero");wrap.style.setProperty("--rc",rc);
   const ring=$("div","ring");ring.style.setProperty("--rc",rc);ring.style.setProperty("--p",s);
-  ring.appendChild($("div","col",`<b>${s}</b><i>/ 100</i>`));
+  const col=$("div","col");col.appendChild($("b",null,hasScore?s:"?"));col.appendChild($("i",null,hasScore?"/ 100":"unscored"));ring.appendChild(col);
   const meta=$("div","meta");
-  meta.appendChild($("span","verdict",esc(r.verdict||"—")));
-  meta.appendChild($("div","target",esc(r.target||"")));
+  meta.appendChild($("span","verdict",r.verdict||"—"));
+  meta.appendChild($("div","target",r.target||""));
   const sub = r.kind==="file"
-    ? (r.is_pe? (r.pe.bitness+"-bit "+r.pe.type+" · "+esc(r.pe.machine)) : "non-PE file · hashed only")
-    : ("indicator · "+esc(r.type));
+    ? (r.is_pe? (r.pe.bitness+"-bit "+r.pe.type+" · "+r.pe.machine) : "non-PE file · hashed only")
+    : ("indicator · "+r.type);
   meta.appendChild($("div","sub",sub));
   wrap.appendChild(ring);wrap.appendChild(meta);
   const c=$("div","card");c.appendChild(wrap);return c;
@@ -171,17 +179,17 @@ function hashCard(h){
 }
 
 function peCard(p,sig){
-  const rows=[["type",esc(p.type)],["bitness",p.bitness+"-bit"],["machine",esc(p.machine)],
-    ["subsystem",esc(p.subsystem)],["compiled",esc(p.compiled)+(p.timestamp_suspicious?' <span class="tag">(suspicious)</span>':"")],
+  const rows=[["type",p.type],["bitness",p.bitness+"-bit"],["machine",p.machine],
+    ["subsystem",p.subsystem],["compiled",p.compiled+(p.timestamp_suspicious?" (suspicious)":"")],
     ["image base",p.image_base],["entry RVA",p.entry_rva]];
-  if(p.is_dotnet)rows.push([".NET / CLR",'<span class="tag">managed image</span>']);
+  if(p.is_dotnet)rows.push([".NET / CLR","managed image"]);
   if(p.tls_callbacks>0)rows.push(["TLS callbacks",p.tls_callbacks+" (pre-entry)"]);
   if(p.exports>0)rows.push(["exports",p.exports]);
   if(p.overlay_size>0)rows.push(["overlay",p.overlay_size+" B  H="+p.overlay_entropy]);
-  if(p.pdb_path)rows.push(["PDB path",'<span class="tag">'+esc(p.pdb_path)+'</span>']);
-  let sigTxt=esc(sig.status);
-  if(sig.status==="valid")sigTxt='<span class="tag" style="color:var(--green)">valid</span>'+(sig.signer?" · "+esc(sig.signer):"");
-  else if(/invalid|revoked/i.test(sig.status))sigTxt='<span style="color:var(--red)">'+esc(sig.status)+'</span>';
+  if(p.pdb_path)rows.push(["PDB path",p.pdb_path]);
+  let sigTxt=sig.status;
+  if(sig.status==="valid"&&sig.signer)sigTxt+=" · "+sig.signer;
+  sigTxt += sig.revocation_checked ? " · online revocation checked" : " · offline trust";
   rows.push(["signature",sigTxt]);
   return card("PE header",kv(rows));
 }
@@ -191,8 +199,8 @@ function sectionsCard(secs){
   secs.forEach(s=>{
     const hi=s.rwx||s.entropy>=7.2;
     const row=$("div","sec"+(hi?" hi":""));
-    row.appendChild($("span","nm",esc(s.name)));
-    row.appendChild($("span","fl",esc(s.flags)+(s.rwx?" ⚠":"")));
+    row.appendChild($("span","nm",s.name));
+    row.appendChild($("span","fl",s.flags+(s.rwx?" ⚠":"")));
     const bar=$("div","bar");bar.appendChild($("i",null,""));bar.firstChild.style.width=Math.min(100,s.entropy/8*100)+"%";
     row.appendChild(bar);
     row.appendChild($("span","h","H="+s.entropy));
@@ -206,12 +214,12 @@ function capCard(caps,finds){
   if(!caps.length)b.appendChild($("div","sub","none of the watched API groups were imported"));
   caps.forEach(c=>{
     const d=$("div","cap"+(c.significant?" sig":""));
-    d.appendChild($("div","t",esc(c.label)+(c.significant?"":' <span class="pill">common</span>')));
-    d.appendChild($("div","b",esc(c.blurb)));
-    if(c.apis&&c.apis.length)d.appendChild($("div","a",c.apis.slice(0,6).map(esc).join("  ")+(c.apis.length>6?" …":"")));
+    d.appendChild($("div","t",c.label+(c.significant?"":" (common)")));
+    d.appendChild($("div","b",c.blurb));
+    if(c.apis&&c.apis.length)d.appendChild($("div","a",c.apis.slice(0,6).join("  ")+(c.apis.length>6?" …":"")));
     b.appendChild(d);
   });
-  (finds||[]).forEach(f=>b.appendChild($("div","find",esc(f.text))));
+  (finds||[]).forEach(f=>b.appendChild($("div","find",f.text)));
   return card("Capabilities",b);
 }
 
@@ -230,19 +238,21 @@ function uebaCard(u){
   const col=u.modifier>0?"var(--red)":u.modifier<0?"var(--green)":"var(--amber)";
   const b=$("div");
   b.appendChild(kv([
-    ["archetype",'<span style="color:'+col+'">'+esc(u.archetype)+'</span>  <span class="sub">'+Math.round(u.confidence*100)+'% conf</span>'],
-    ["reasoning",esc(u.reasoning)],
-    ["modifier",'<span style="color:'+col+'">'+(u.modifier>0?"+":"")+u.modifier+'</span>']
+    ["archetype",u.archetype+" · "+Math.round(u.confidence*100)+"% confidence"],
+    ["reasoning",u.reasoning],
+    ["modifier",(u.modifier>0?"+":"")+u.modifier]
   ]));
   return card("Behavioral profile · UEBA",b);
 }
 
-function iocCard(e,hints){
+function iocCard(e,hints,intel){
   const b=$("div");let any=false;
-  (e.urls||[]).forEach(u=>{any=true;b.appendChild($("div","mono",'<span class="tag">url</span> '+esc(u)));});
-  (e.ips||[]).forEach(i=>{any=true;b.appendChild($("div","mono",'<span class="tag">ip&nbsp;</span> '+esc(i)));});
-  if((e.tokens||[]).length){any=true;const p=$("div");p.style.marginTop="6px";e.tokens.forEach(t=>p.appendChild($("span","pill",esc(t))));b.appendChild(p);}
-  if(hints&&hints.keywords&&hints.keywords.length){any=true;const p=$("div");p.style.marginTop="8px";p.innerHTML='<span class="sub">hints: </span>';hints.keywords.forEach(k=>p.appendChild($("span","pill",esc(k))));b.appendChild(p);}
+  const line=(label,value)=>{const row=$("div","mono");row.appendChild($("span","tag",label));row.appendChild(document.createTextNode(" "+value));return row;};
+  (e.urls||[]).forEach(u=>{any=true;b.appendChild(line("url",u));});
+  (e.ips||[]).forEach(i=>{any=true;b.appendChild(line("ip",i));});
+  if((e.tokens||[]).length){any=true;const p=$("div");p.style.marginTop="6px";e.tokens.forEach(t=>p.appendChild($("span","pill",t)));b.appendChild(p);}
+  if(hints&&hints.keywords&&hints.keywords.length){any=true;const p=$("div");p.style.marginTop="8px";p.appendChild($("span","sub","hints: "));hints.keywords.forEach(k=>p.appendChild($("span","pill",k)));b.appendChild(p);}
+  (intel||[]).forEach(record=>{any=true;const box=$("div","cap");box.appendChild($("div","t",record.value));box.appendChild($("div","b",record.type));(record.sources||[]).forEach(source=>box.appendChild($("div","a",source.source+": "+(source.summary||source.error||"not found"))));b.appendChild(box);});
   if(!any)b.appendChild($("div","sub","no embedded indicators found in strings"));
   return card("Embedded indicators",b);
 }
@@ -250,7 +260,7 @@ function iocCard(e,hints){
 // ---- force-directed threat graph ----
 function graphCard(r){
   const wrap=$("div");const NS="http://www.w3.org/2000/svg";
-  const svg=document.createElementNS(NS,"svg");svg.setAttribute("id","graph");svg.setAttribute("viewBox","0 0 700 340");
+  const svg=document.createElementNS(NS,"svg");svg.setAttribute("id","graph");svg.setAttribute("viewBox","0 0 700 340");svg.setAttribute("role","img");svg.setAttribute("aria-label","Relationships found in this report");
   wrap.appendChild(svg);
   const W=700,H=340,cx=W/2,cy=H/2;
   const nodes=[],edges=[];
@@ -270,6 +280,7 @@ function graphCard(r){
     (r.sources||[]).forEach(s=>add(s.source,s.found&&s.malicious>0?"var(--red)":"var(--green)",11));
   }
   const eG=[],nG=[];
+  const animate=!matchMedia("(prefers-reduced-motion: reduce)").matches;
   edges.forEach(()=>{const l=document.createElementNS(NS,"line");l.setAttribute("class","gedge");svg.appendChild(l);eG.push(l);});
   nodes.forEach(n=>{
     const g=document.createElementNS(NS,"g");g.setAttribute("class","gnode");
@@ -290,7 +301,7 @@ function graphCard(r){
       n.x+=n.vx*=0.86;n.y+=n.vy*=0.86;n.x=Math.max(24,Math.min(W-24,n.x));n.y=Math.max(24,Math.min(H-24,n.y));});
     eG.forEach((l,i)=>{const[a,b]=edges[i];l.setAttribute("x1",a.x);l.setAttribute("y1",a.y);l.setAttribute("x2",b.x);l.setAttribute("y2",b.y);});
     nG.forEach(({g,n})=>g.setAttribute("transform","translate("+n.x+","+n.y+")"));
-    requestAnimationFrame(step);
+    if(animate)requestAnimationFrame(step);
   }
   step();
   return card("Threat graph",wrap);
@@ -298,42 +309,47 @@ function graphCard(r){
 
 function sourcesCard(r){
   const b=$("div");
-  if(!r.sources.length)b.appendChild($("div","sub","no configured source handles this indicator type — set VT_API_KEY / ABUSEIPDB_API_KEY"));
-  r.sources.forEach(s=>{
+  if(!(r.sources||[]).length)b.appendChild($("div","sub","No provider returned evidence. Use --enrich and configure a provider key."));
+  (r.sources||[]).forEach(s=>{
     const d=$("div","cap"+(s.found&&s.malicious>0?" sig":""));
-    let head='<span class="t">'+esc(s.source)+'</span> ';
-    if(!s.ok)head+='<span class="pill">'+esc(s.error||"error")+'</span>';
-    else if(!s.found)head+='<span class="pill ok">clean / unknown</span>';
-    else head+='<span class="pill '+(s.malicious>0||s.score>=50?"warn":s.score>=25?"hot":"ok")+'">'+esc(s.summary)+'</span>';
-    d.innerHTML=head;
-    (s.details||[]).forEach(kvp=>d.appendChild($("div","a",esc(kvp.k)+": "+esc(kvp.v))));
+    d.appendChild($("span","t",s.source));
+    let state,klass="pill";
+    if(!s.ok)state=s.error||"error";
+    else if(!s.found){state="not found";klass+=" ok";}
+    else{state=s.summary;klass+=" "+(s.malicious>0||s.score>=50?"warn":s.score>=25?"hot":"ok");}
+    d.appendChild(document.createTextNode(" "));
+    d.appendChild($("span",klass,state));
+    (s.details||[]).forEach(kvp=>d.appendChild($("div","a",kvp.k+": "+kvp.v)));
     b.appendChild(d);
   });
+  (r.source_errors||[]).forEach(error=>b.appendChild($("div","find",error)));
   return card("Threat intelligence",b);
 }
 
 function landing(){
   const e=$("div","empty");
-  e.innerHTML='<div style="font-size:44px">🔱</div><h2 style="letter-spacing:1px;margin:8px 0">Drop it anywhere. Point it at anything.</h2>'+
-    '<div class="drop"><p>Run <code>horus-gui.exe</code> and pick a file, or drag a sample onto it.</p>'+
-    '<p class="sub">Also: <code>horus &lt;file&gt;</code> · <code>horus --scan &lt;dir&gt;</code> · <code>horus --diff a b</code></p></div>';
+  const icon=$("div",null,"🔱");icon.style.fontSize="44px";e.appendChild(icon);
+  const title=$("h2",null,"Drop it anywhere. Point it at anything.");title.style.letterSpacing="1px";title.style.margin="8px 0";e.appendChild(title);
+  const drop=$("div","drop");drop.appendChild($("p",null,"Run horus-gui.exe and pick a file, or drag a sample onto it."));
+  drop.appendChild($("p","sub","Also: horus <file> · horus --scan <dir> · horus --diff a b"));e.appendChild(drop);
   return card(null,e);
 }
 
 function render(){
-  const app=document.getElementById("app");app.innerHTML="";
+  const app=document.getElementById("app");app.replaceChildren();
   const r=REPORT;
   if(!r){app.appendChild(landing());return;}
-  if(r.kind==="error"){const c=$("div","card");c.appendChild($("div","empty","⚠ "+esc(r.error)));app.appendChild(c);return;}
+  if(r.kind==="error"){const c=$("div","card");c.appendChild($("div","empty","⚠ "+r.error));app.appendChild(c);return;}
   app.appendChild(hero(r));
   if(r.kind==="indicator"){
     const g=$("div","grid side");g.appendChild(sourcesCard(r));g.appendChild(graphCard(r));app.appendChild(g);return;
   }
   // file
   app.appendChild(graphCard(r));
+  if((r.hash_intel||[]).length||(r.source_errors||[]).length)app.appendChild(sourcesCard({sources:r.hash_intel||[],source_errors:r.source_errors||[]}));
   const g1=$("div","grid two");
   g1.appendChild(hashCard(r.hashes));
-  if(r.is_pe)g1.appendChild(peCard(r.pe,r.signature)); else g1.appendChild(card("File","<div class='sub'>Not a PE — hashes only.</div>"));
+  if(r.is_pe)g1.appendChild(peCard(r.pe,r.signature)); else g1.appendChild(card("File",$("div","sub","Not a PE — hashes only.")));
   app.appendChild(g1);
   if(r.is_pe){
     app.appendChild(sectionsCard(r.pe.sections));
@@ -343,7 +359,7 @@ function render(){
     app.appendChild(g2);
     app.appendChild(attackCard(r.attack));
   }
-  app.appendChild(iocCard(r.embedded,r.hints));
+  app.appendChild(iocCard(r.embedded,r.hints,r.embedded_intel));
 }
 render();
 </script>

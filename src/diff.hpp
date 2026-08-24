@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 //  diff.hpp  -  side-by-side compare of two PEs
 //
-//  "Are these the same family?" answered without uploading anything: imphash
-//  match, TLSH distance, rich-header match, section entropy drift, verdicts.
+//  Compare two samples without uploading either one: imphash match, TLSH
+//  distance, rich-header match, section entropy drift, and verdicts.
 // ---------------------------------------------------------------------------
 #pragma once
 
@@ -52,7 +52,7 @@ inline int run(const core::Options& base, const std::string& pa, const std::stri
         if (!A.tlsh.empty() && !B.tlsh.empty()) {
             int d = fuzzy::tlsh_diff(A.tlsh, B.tlsh);
             std::string note = d == 0   ? ansi::green("0 (identical)")
-                             : d < 40    ? ansi::green(std::to_string(d) + " (near-identical / same family)")
+                             : d < 40    ? ansi::green(std::to_string(d) + " (near-identical / strongly related)")
                              : d < 120   ? ansi::yellow(std::to_string(d) + " (related)")
                              :             ansi::grey(std::to_string(d) + " (unrelated)");
             kv("TLSH dist", note);

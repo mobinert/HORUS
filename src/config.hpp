@@ -44,7 +44,8 @@ inline Config load(const std::string& path) {
         auto doc = json::parse(ss.str());
         c.vt_key          = doc["vt_key"].as_string();
         c.abuse_key       = doc["abuse_key"].as_string();
-        c.cache_ttl_hours = (int)doc["cache_ttl_hours"].as_int(0);
+        long long ttl = doc["cache_ttl_hours"].as_int(0);
+        c.cache_ttl_hours = ttl >= 0 && ttl <= 87600 ? static_cast<int>(ttl) : 0;
         c.loaded = true;
     } catch (...) {
         // bad json - pretend the file wasn't there
@@ -58,7 +59,7 @@ inline Config load() { return load(config_path()); }
 inline void apply(core::Options& o, const Config& c) {
     if (o.vt_key.empty()    && !c.vt_key.empty())    o.vt_key = c.vt_key;
     if (o.abuse_key.empty() && !c.abuse_key.empty()) o.abuse_key = c.abuse_key;
-    if (o.cache_ttl_hours == 0 && c.cache_ttl_hours > 0) o.cache_ttl_hours = c.cache_ttl_hours;
+    if (!o.cache_ttl_set && c.cache_ttl_hours > 0) o.cache_ttl_hours = c.cache_ttl_hours;
 }
 
 } // namespace config

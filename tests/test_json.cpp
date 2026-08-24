@@ -7,6 +7,11 @@ using namespace horus;
 int failures = 0;
 #define CHECK(cond) do { if(!(cond)){ std::cerr << "FAIL line " << __LINE__ << ": " #cond "\n"; ++failures; } } while(0)
 
+static bool rejected(const std::string& text) {
+    try { json::parse(text); } catch (const std::exception&) { return true; }
+    return false;
+}
+
 int main() {
     // 1. Realistic VirusTotal v3 file-report skeleton
     std::string vt = R"({
@@ -70,6 +75,25 @@ int main() {
     // 6. Whitespace tolerance
     auto w = json::parse("   {  \"x\"  :  42  }  ");
     CHECK(w["x"].as_int() == 42);
+
+    // Strict grammar and resource limits for provider responses and case state.
+    CHECK(rejected("01"));
+    CHECK(rejected("1."));
+    CHECK(rejected("1e"));
+    CHECK(rejected("-"));
+    CHECK(rejected("1e309"));
+    CHECK(rejected("{\"a\":1,\"a\":2}"));
+    CHECK(rejected(std::string("{\"s\":\"line\nfeed\"}")));
+    CHECK(rejected(std::string("{\"s\":\"") + "\\u" + "DE00\"}"));
+
+    std::string at_limit(128, '[');
+    at_limit += "0";
+    at_limit.append(128, ']');
+    CHECK(json::parse(at_limit)[0].is_array());
+    std::string too_deep(129, '[');
+    too_deep += "0";
+    too_deep.append(129, ']');
+    CHECK(rejected(too_deep));
 
     if (failures == 0) std::cout << "ALL JSON TESTS PASSED\n";
     else std::cout << failures << " JSON test(s) failed\n";

@@ -68,6 +68,14 @@ inline int render_file(const core::Options& opts, const core::FileReport& rep) {
     kv("SHA-256", hashes.sha256);
     if (!rep.tlsh.empty())   kv("TLSH",   rep.tlsh);
     if (!rep.ssdeep.empty()) kv("ssdeep", rep.ssdeep);
+    kv("analysis", core::analysis_status_name(rep.analysis_status));
+    if (!rep.error.empty()) kv("note", rep.error);
+
+    if (rep.analysis_status == core::AnalysisStatus::Skipped) {
+        section("VERDICT");
+        std::cout << "  " << ansi::yellow("UNKNOWN") << "   " << ansi::grey(rep.error) << "\n\n";
+        return 3;
+    }
 
     if (!info.valid) {
         std::cout << "\n  " << ansi::grey("Not a PE file (" + info.error + ") - hashing only.") << "\n";
@@ -100,6 +108,7 @@ inline int render_file(const core::Options& opts, const core::FileReport& rep) {
             }
             if (!sig.signer.empty()) line += ansi::grey("  [" + sig.signer + "]");
             kv("signature", line);
+            kv("trust mode", sig.revocation_checked ? "online revocation" : "offline / cache-only");
         }
         if (info.is_dotnet)             kv("managed",  ansi::cyan(".NET / CLR image"));
         if (info.tls_callback_count > 0)
@@ -222,14 +231,9 @@ inline int render_file(const core::Options& opts, const core::FileReport& rep) {
                 for (auto& t : emb.interesting) row += t + "  ";
                 std::cout << row << "\n";
             }
-            if (!opts.abuse_key.empty() && !emb.ips.empty()) {
-                auto sources = core::build_sources(opts);
-                std::cout << "\n  " << ansi::grey("enriching embedded IPs...") << "\n";
-                for (auto& ip : emb.ips) {
-                    auto rs = intel::enrich(sources, ip, IocType::IPv4);
-                    std::cout << "  " << ansi::bold(ip) << "\n";
-                    for (auto& r : rs) print_source_result(r);
-                }
+            for (const auto& record : rep.embedded_intel) {
+                std::cout << "\n  " << ansi::bold(record.value) << "\n";
+                for (const auto& result : record.results) print_source_result(result);
             }
         }
 
@@ -284,16 +288,23 @@ inline int render_file(const core::Options& opts, const core::FileReport& rep) {
         }
     }
 
-    if (!opts.vt_key.empty()) {
-        section("VIRUSTOTAL");
-        print_source_result(rep.vt);
-    } else {
-        std::cout << "\n  " << ansi::grey("(set VT_API_KEY to add VirusTotal file reputation)") << "\n";
+    if (opts.enrich) {
+        section("THREAT INTELLIGENCE");
+        for (const auto& result : rep.hash_intel) print_source_result(result);
+        if (rep.hash_intel.empty() && rep.embedded_intel.empty())
+            std::cout << "  " << ansi::grey("no provider returned a file or IOC report") << "\n";
+        for (const auto& error : rep.source_errors)
+            std::cout << "  " << ansi::grey(error) << "\n";
     }
 
     section("VERDICT");
-    std::cout << "  " << verdict_badge(core::verdict_for_score(rep.final_score), rep.final_score)
-              << "   risk " << colour_score(rep.final_score) << "\n";
+    if (rep.has_score) {
+        std::cout << "  " << verdict_badge(core::verdict_for_score(rep.final_score), rep.final_score)
+                  << "   risk " << colour_score(rep.final_score) << "\n";
+    } else {
+        std::cout << "  " << ansi::yellow("UNKNOWN") << "   "
+                  << ansi::grey(rep.error.empty() ? "no scoreable evidence" : rep.error) << "\n";
+    }
 
     if (info.valid) {
         std::string base_line = "base score (static): " + std::to_string(rep.base_score);
@@ -312,28 +323,38 @@ inline int render_file(const core::Options& opts, const core::FileReport& rep) {
     }
 
     std::cout << "\n";
-    return rep.final_score >= 30 ? 1 : 0;
+    return core::analysis_exit_code(rep.analysis_status, rep.has_score, rep.final_score);
 }
 
 // ---------------------------------------------------------------------------
 //  Indicator report
 // ---------------------------------------------------------------------------
-inline int render_indicator(const core::Options& /*opts*/, const core::IndicatorReport& rep) {
+inline int render_indicator(const core::Options& opts, const core::IndicatorReport& rep) {
     using namespace horus::ui;
     section("INDICATOR");
     kv("value", rep.target);
     kv("type",  ioc_type_name(rep.type));
 
     section("INTEL");
-    if (rep.results.empty())
-        std::cout << "  " << ansi::grey("no configured source handles this indicator type "
-                                        "(set VT_API_KEY / ABUSEIPDB_API_KEY)") << "\n";
+    if (rep.results.empty()) {
+        const char* hint = opts.enrich
+            ? "no configured source handles this indicator type"
+            : "network enrichment was not requested (use --enrich)";
+        std::cout << "  " << ansi::grey(hint) << "\n";
+    }
     for (auto& r : rep.results) print_source_result(r);
+    for (const auto& error : rep.source_errors)
+        std::cout << "  " << ansi::grey(error) << "\n";
 
     section("VERDICT");
-    std::cout << "  " << verdict_badge(core::verdict_for_score(rep.worst), rep.worst)
-              << "   risk " << colour_score(rep.worst) << "\n\n";
-    return rep.worst >= 30 ? 1 : 0;
+    if (rep.has_score) {
+        std::cout << "  " << verdict_badge(core::verdict_for_score(rep.worst), rep.worst)
+                  << "   risk " << colour_score(rep.worst) << "\n\n";
+    } else {
+        std::cout << "  " << ansi::yellow("UNKNOWN") << "   "
+                  << ansi::grey("no provider returned scoreable evidence") << "\n\n";
+    }
+    return core::analysis_exit_code(rep.analysis_status, rep.has_score, rep.worst);
 }
 
 } // namespace render

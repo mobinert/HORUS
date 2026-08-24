@@ -9,9 +9,10 @@
 
 #include "core.hpp"
 #include "console.hpp"
+#include "output.hpp"
 
 #include <iostream>
-#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -25,8 +26,11 @@ struct Row {
     std::string sha256;
     std::string imphash;
     bool        is_pe = false;
+    core::AnalysisStatus status = core::AnalysisStatus::Unknown;
+    bool        has_score = false;
     int         score = 0;
     std::string verdict;
+    std::string error;
 };
 
 inline std::vector<Row> scan(const core::Options& base) {
@@ -39,16 +43,18 @@ inline std::vector<Row> scan(const core::Options& base) {
     auto handle = [&](const fs::path& p) {
         core::Options o = base;
         o.target = p.string();
-        o.vt_key.clear();               // static-only per file
+        o.enrich = false;                // batch stays local and predictable
         core::FileReport r = core::analyze_file(o);
-        if (!r.ok) return;
         Row row;
         row.path    = p.string();
         row.sha256  = r.hashes.sha256;
         row.imphash = r.imphash;
         row.is_pe   = r.info.valid;
+        row.status  = r.analysis_status;
+        row.has_score = r.has_score;
         row.score   = r.final_score;
-        row.verdict = core::verdict_for_score(r.final_score);
+        row.verdict = core::verdict_name(r.has_score, r.final_score);
+        row.error   = r.error;
         rows.push_back(std::move(row));
     };
 
@@ -63,8 +69,11 @@ inline std::vector<Row> scan(const core::Options& base) {
             if (!ec && de.is_regular_file(ec)) handle(de.path());
     }
 
-    std::sort(rows.begin(), rows.end(),
-              [](const Row& a, const Row& b){ return a.score > b.score; });
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        if (a.has_score != b.has_score) return a.has_score > b.has_score;
+        if (a.score != b.score) return a.score > b.score;
+        return a.path < b.path;
+    });
     return rows;
 }
 
@@ -73,79 +82,97 @@ inline std::string basename(const std::string& p) {
     return s == std::string::npos ? p : p.substr(s + 1);
 }
 
-inline void write_csv(const std::vector<Row>& rows, const std::string& path) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return;
-    f << "path,sha256,is_pe,score,verdict\n";
+inline bool write_csv(const std::vector<Row>& rows, const std::string& path,
+                      std::string& error) {
+    std::ostringstream out;
+    out << "path,sha256,is_pe,analysis_status,score,verdict,error\n";
     for (const auto& r : rows) {
-        std::string p = r.path;
-        bool q = p.find(',') != std::string::npos || p.find('"') != std::string::npos;
-        if (q) { std::string e = "\""; for (char c : p) { if (c=='"') e += '"'; e += c; } e += '"'; p = e; }
-        f << p << "," << r.sha256 << "," << (r.is_pe ? "1" : "0") << ","
-          << r.score << "," << r.verdict << "\n";
+        out << output::csv_cell(r.path) << ',' << output::csv_cell(r.sha256) << ','
+            << (r.is_pe ? "1" : "0") << ',' << core::analysis_status_name(r.status) << ',';
+        if (r.has_score) out << r.score;
+        out << ',' << output::csv_cell(r.verdict) << ',' << output::csv_cell(r.error) << "\n";
     }
+    return output::write_atomic(std::filesystem::path(path), out.str(), error);
 }
 
-inline void write_json(const std::vector<Row>& rows, const std::string& path) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return;
-    f << "[\n";
+inline std::string rows_json(const std::vector<Row>& rows, bool pretty) {
+    std::ostringstream out;
+    out << (pretty ? "[\n" : "[");
     for (size_t i = 0; i < rows.size(); ++i) {
         const auto& r = rows[i];
-        f << "  {\"path\":\"" << core::json_escape(r.path) << "\""
-          << ",\"sha256\":\"" << r.sha256 << "\""
-          << ",\"imphash\":\"" << r.imphash << "\""
-          << ",\"is_pe\":" << (r.is_pe ? "true" : "false")
-          << ",\"score\":" << r.score
-          << ",\"verdict\":\"" << r.verdict << "\"}"
-          << (i + 1 < rows.size() ? "," : "") << "\n";
+        if (pretty) out << "  ";
+        out << "{\"path\":\"" << core::json_escape(r.path) << "\""
+            << ",\"sha256\":\"" << r.sha256 << "\""
+            << ",\"imphash\":\"" << r.imphash << "\""
+            << ",\"is_pe\":" << (r.is_pe ? "true" : "false")
+            << ",\"analysis_status\":\"" << core::analysis_status_name(r.status) << "\""
+            << ",\"score\":" << (r.has_score ? std::to_string(r.score) : "null")
+            << ",\"verdict\":\"" << r.verdict << "\""
+            << ",\"error\":\"" << core::json_escape(r.error) << "\"}"
+            << (i + 1 < rows.size() ? "," : "");
+        if (pretty) out << "\n";
     }
-    f << "]\n";
+    out << (pretty ? "]\n" : "]\n");
+    return out.str();
+}
+
+inline bool write_json(const std::vector<Row>& rows, const std::string& path,
+                       std::string& error) {
+    return output::write_atomic(std::filesystem::path(path), rows_json(rows, true), error);
 }
 
 inline int run(const core::Options& base) {
     using namespace ui;
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!fs::exists(fs::path(base.scan_dir), ec)) {
+    fs::path root(base.scan_dir);
+    if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) {
         std::cerr << "error: no such directory: " << base.scan_dir << "\n";
         return 2;
     }
 
     std::vector<Row> rows = scan(base);
 
-    if (base.json) { std::cout << "["; /* compact */
-        for (size_t i = 0; i < rows.size(); ++i) {
-            const auto& r = rows[i];
-            std::cout << (i?",":"") << "{\"path\":\"" << core::json_escape(r.path)
-                      << "\",\"sha256\":\"" << r.sha256 << "\",\"is_pe\":" << (r.is_pe?"true":"false")
-                      << ",\"score\":" << r.score << ",\"verdict\":\"" << r.verdict << "\"}";
-        }
-        std::cout << "]\n";
+    if (base.json) {
+        std::cout << rows_json(rows, false);
     } else {
         section("BATCH SCAN  (" + std::to_string(rows.size()) + " files, worst first)");
         std::cout << "  " << ansi::grey("SCORE  VERDICT           FILE") << "\n";
-        int flagged = 0;
+        int flagged = 0, incomplete = 0;
         for (const auto& r : rows) {
-            if (r.score >= 30) ++flagged;
+            if (r.has_score && r.score >= 30) ++flagged;
+            if (r.status != core::AnalysisStatus::Complete) ++incomplete;
             char head[64];
-            std::snprintf(head, sizeof(head), "  %3d    %-16s  ", r.score, r.verdict.c_str());
+            std::string shown_score = r.has_score ? std::to_string(r.score) : "-";
+            std::snprintf(head, sizeof(head), "  %3s    %-16s  ", shown_score.c_str(), r.verdict.c_str());
             std::string line = head + basename(r.path);
-            if (r.score >= 60)      std::cout << ansi::red(line)    << "\n";
-            else if (r.score >= 30) std::cout << ansi::yellow(line) << "\n";
+            if (r.has_score && r.score >= 60)      std::cout << ansi::red(line)    << "\n";
+            else if (r.has_score && r.score >= 30) std::cout << ansi::yellow(line) << "\n";
+            else if (!r.has_score)                 std::cout << ansi::grey(line)   << "\n";
             else                    std::cout << line               << "\n";
         }
         section("SUMMARY");
         kv("scanned", std::to_string(rows.size()) + " files");
         kv("flagged", std::to_string(flagged) + ansi::grey("  (score >= 30)"));
+        kv("incomplete", std::to_string(incomplete) + ansi::grey("  (unknown, skipped, or error)"));
     }
 
-    if (!base.csv_out.empty())  write_csv(rows, base.csv_out);
-    if (!base.json_out.empty()) write_json(rows, base.json_out);
+    std::string error;
+    if (!base.csv_out.empty() && !write_csv(rows, base.csv_out, error)) {
+        std::cerr << "error: " << error << "\n";
+        return 2;
+    }
+    if (!base.json_out.empty() && !write_json(rows, base.json_out, error)) {
+        std::cerr << "error: " << error << "\n";
+        return 2;
+    }
 
-    int worst = 0;
-    for (const auto& r : rows) worst = std::max(worst, r.score);
-    return worst >= 30 ? 1 : 0;
+    bool incomplete = false;
+    for (const auto& r : rows) {
+        if (r.has_score && r.score >= 30) return 1;
+        if (r.status != core::AnalysisStatus::Complete) incomplete = true;
+    }
+    return incomplete ? 3 : 0;
 }
 
 } // namespace batch

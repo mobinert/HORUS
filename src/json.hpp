@@ -17,6 +17,9 @@
 #include <memory>
 #include <stdexcept>
 #include <cstdint>
+#include <cerrno>
+#include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <sstream>
 
@@ -96,11 +99,13 @@ private:
 // ---------------------------------------------------------------------------
 class Parser {
 public:
+    static constexpr size_t kMaxDepth = 128;
+
     explicit Parser(const std::string& text) : s_(text), i_(0) {}
 
     Value parse() {
         skip_ws();
-        Value v = parse_value();
+        Value v = parse_value(0);
         skip_ws();
         // Trailing junk is suspicious - surface it rather than silently ignore.
         if (i_ != s_.size())
@@ -136,12 +141,16 @@ private:
         }
     }
 
-    Value parse_value() {
+    Value parse_value(size_t depth) {
         skip_ws();
         char c = peek();
         switch (c) {
-            case '{': return parse_object();
-            case '[': return parse_array();
+            case '{':
+                if (depth >= kMaxDepth) fail("maximum nesting depth exceeded");
+                return parse_object(depth);
+            case '[':
+                if (depth >= kMaxDepth) fail("maximum nesting depth exceeded");
+                return parse_array(depth);
             case '"': { Value v; v.type_ = Type::String; v.str_ = parse_string(); return v; }
             case 't': case 'f': return parse_bool();
             case 'n': return parse_null();
@@ -151,7 +160,7 @@ private:
         }
     }
 
-    Value parse_object() {
+    Value parse_object(size_t depth) {
         Value v; v.type_ = Type::Object;
         get(); // consume '{'
         skip_ws();
@@ -160,9 +169,10 @@ private:
             skip_ws();
             if (peek() != '"') fail("expected string key in object");
             std::string key = parse_string();
+            if (v.obj_.find(key) != v.obj_.end()) fail("duplicate object key");
             skip_ws();
             if (get() != ':') fail("expected ':' after object key");
-            v.obj_.emplace(std::move(key), parse_value());
+            v.obj_.emplace(std::move(key), parse_value(depth + 1));
             skip_ws();
             char c = get();
             if (c == ',') continue;
@@ -172,13 +182,13 @@ private:
         return v;
     }
 
-    Value parse_array() {
+    Value parse_array(size_t depth) {
         Value v; v.type_ = Type::Array;
         get(); // consume '['
         skip_ws();
         if (peek() == ']') { get(); return v; }
         for (;;) {
-            v.arr_.push_back(parse_value());
+            v.arr_.push_back(parse_value(depth + 1));
             skip_ws();
             char c = get();
             if (c == ',') continue;
@@ -203,15 +213,31 @@ private:
     Value parse_number() {
         size_t start = i_;
         if (peek() == '-') get();
-        while (more() && std::isdigit((unsigned char)peek())) get();
-        if (more() && peek() == '.') { get(); while (more() && std::isdigit((unsigned char)peek())) get(); }
+        if (!more() || !std::isdigit((unsigned char)peek())) fail("expected digit in number");
+        if (peek() == '0') {
+            get();
+            if (more() && std::isdigit((unsigned char)peek())) fail("leading zero in number");
+        } else {
+            while (more() && std::isdigit((unsigned char)peek())) get();
+        }
+        if (more() && peek() == '.') {
+            get();
+            if (!more() || !std::isdigit((unsigned char)peek())) fail("expected digit after decimal point");
+            while (more() && std::isdigit((unsigned char)peek())) get();
+        }
         if (more() && (peek() == 'e' || peek() == 'E')) {
             get();
             if (more() && (peek() == '+' || peek() == '-')) get();
+            if (!more() || !std::isdigit((unsigned char)peek())) fail("expected exponent digit");
             while (more() && std::isdigit((unsigned char)peek())) get();
         }
         Value v; v.type_ = Type::Number;
-        v.num_ = std::strtod(s_.substr(start, i_ - start).c_str(), nullptr);
+        std::string token = s_.substr(start, i_ - start);
+        char* end = nullptr;
+        errno = 0;
+        v.num_ = std::strtod(token.c_str(), &end);
+        if (errno == ERANGE || !end || *end != '\0' || !std::isfinite(v.num_))
+            fail("number is outside the supported range");
         return v;
     }
 
@@ -224,6 +250,7 @@ private:
         for (;;) {
             char c = get();
             if (c == '"') break;
+            if ((unsigned char)c < 0x20) fail("unescaped control character in string");
             if (c == '\\') {
                 char e = get();
                 switch (e) {
@@ -268,6 +295,8 @@ private:
             if (lo < 0xDC00 || lo > 0xDFFF) fail("invalid low surrogate");
             cp = 0x10000 + (((cp - 0xD800) << 10) | (lo - 0xDC00));
         }
+        if (cp >= 0xDC00 && cp <= 0xDFFF) fail("unexpected low surrogate");
+        if (cp > 0x10FFFF) fail("invalid Unicode code point");
         if (cp <= 0x7F) {
             out += (char)cp;
         } else if (cp <= 0x7FF) {

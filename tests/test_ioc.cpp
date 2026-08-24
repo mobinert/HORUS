@@ -40,6 +40,12 @@ int main() {
     EXPECT("http://evil.example.com/payload.bin", IocType::Url);
     EXPECT("https://malware.test/a?b=c", IocType::Url);
     EXPECT("HTTPS://CAPS.EXAMPLE.ORG", IocType::Url);
+    EXPECT("ftp://[::1]/sample", IocType::Url);
+    EXPECT("http://", IocType::Unknown);
+    EXPECT("https:///missing-host", IocType::Unknown);
+    EXPECT("http://?query", IocType::Unknown);
+    EXPECT("http://example.com:", IocType::Unknown);
+    EXPECT("http://bad host.example/a", IocType::Unknown);
 
     // Email
     EXPECT("attacker@phishing-domain.com", IocType::Email);

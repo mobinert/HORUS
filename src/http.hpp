@@ -10,6 +10,7 @@
 
 #include <string>
 #include <map>
+#include <cstddef>
 
 namespace horus {
 namespace http {
@@ -22,6 +23,7 @@ struct Request {
     std::string                        body;          // POST payload, if any
     bool                               https  = true;
     int                                timeout_ms = 15000;
+    size_t                             max_response_bytes = 16u * 1024u * 1024u;
 };
 
 struct Response {
@@ -34,6 +36,17 @@ struct Response {
 // Perform the request synchronously. Network/handle failures come back with
 // ok=false and a human-readable error rather than throwing.
 Response perform(const Request& req);
+
+inline bool append_limited(Response& response, const char* data, size_t size,
+                           size_t limit) {
+    if (response.body.size() > limit || size > limit - response.body.size()) {
+        response.ok = false;
+        response.error = "HTTP response exceeds " + std::to_string(limit) + " bytes";
+        return false;
+    }
+    response.body.append(data, size);
+    return true;
+}
 
 } // namespace http
 } // namespace horus

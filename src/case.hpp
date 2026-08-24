@@ -97,13 +97,19 @@ inline bool enumerate(const fs::path& root, const fs::path& workspace, bool recu
         error = "case source is not a directory: " + root.string();
         return false;
     }
+    if (path_within(root, workspace) && path_within(workspace, root)) {
+        error = "case workspace must be separate from the samples directory";
+        return false;
+    }
+    const bool workspace_inside_root = path_within(workspace, root);
 
     if (recurse) {
         fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
         while (!ec && it != end) {
-            if (it->is_directory(ec) && path_within(it->path(), workspace)) {
+            if (workspace_inside_root && it->is_directory(ec) &&
+                path_within(it->path(), workspace)) {
                 it.disable_recursion_pending();
-            } else if (!path_within(it->path(), workspace) &&
+            } else if ((!workspace_inside_root || !path_within(it->path(), workspace)) &&
                        !add_input(*it, root, files, error)) {
                 return false;
             }
@@ -112,9 +118,14 @@ inline bool enumerate(const fs::path& root, const fs::path& workspace, bool recu
     } else {
         for (fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
              !ec && it != end; it.increment(ec)) {
-            if (!path_within(it->path(), workspace) && !add_input(*it, root, files, error))
+            if ((!workspace_inside_root || !path_within(it->path(), workspace)) &&
+                !add_input(*it, root, files, error))
                 return false;
         }
+    }
+    if (ec) {
+        error = "cannot enumerate case directory: " + ec.message();
+        return false;
     }
     std::sort(files.begin(), files.end(), [](const InputFile& a, const InputFile& b) {
         return path_key(a.relative_path) < path_key(b.relative_path);

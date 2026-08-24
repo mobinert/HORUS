@@ -72,7 +72,8 @@ option(BUILD_TESTING "Build the unit tests" ON)
 if(BUILD_TESTING)
     enable_testing()
     set(HORUS_TESTS test_ioc test_json test_pe test_score test_fuzzy
-                    test_core test_config test_cache test_diff test_case)
+                    test_core test_config test_cache test_diff test_case
+                    test_http test_report test_output)
     foreach(t IN LISTS HORUS_TESTS)
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE horus_core)
@@ -83,4 +84,10 @@ if(BUILD_TESTING)
         add_test(NAME ${t} COMMAND ${t})
     endforeach()
     target_link_libraries(test_case PRIVATE shell32)
+    target_link_libraries(test_report PRIVATE ${GUI_LIBS})
+    add_test(NAME test_direct_cli
+             COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                     -File "${CMAKE_SOURCE_DIR}/tests/direct_smoke.ps1"
+                     -Horus $<TARGET_FILE:horus>)
+    set_tests_properties(test_direct_cli PROPERTIES TIMEOUT 60)
 endif()

@@ -5,6 +5,7 @@
 #include "encoding.hpp"
 #include "gui/case_html.hpp"
 #include "json.hpp"
+#include "output.hpp"
 
 #include <windows.h>
 #include <objbase.h>
@@ -252,32 +253,6 @@ inline bool load_state(const fs::path& path, State& state, bool& exists,
     }
 }
 
-inline bool write_atomic(const fs::path& path, const std::string& content,
-                         std::string& error) {
-    fs::path temp = path;
-    temp += ".tmp-" + std::to_string(GetCurrentProcessId());
-    {
-        std::ofstream f(temp, std::ios::binary | std::ios::trunc);
-        if (!f) { error = "cannot open output: " + path.string(); return false; }
-        f.write(content.data(), static_cast<std::streamsize>(content.size()));
-        f.flush();
-        if (!f) {
-            error = "cannot write output: " + path.string();
-            f.close();
-            std::error_code ec; fs::remove(temp, ec);
-            return false;
-        }
-    }
-    if (!MoveFileExW(temp.c_str(), path.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        error = "cannot replace output: " + path.string() +
-                " (Windows error " + std::to_string(GetLastError()) + ")";
-        std::error_code ec; fs::remove(temp, ec);
-        return false;
-    }
-    return true;
-}
-
 inline std::string public_json(const RunResult& run, const core::Options& opts) {
     size_t complete = 0, unknown = 0, skipped = 0, errors = 0, missing = 0, flagged = 0;
     for (const auto& s : run.state.samples) {
@@ -354,17 +329,6 @@ inline std::string public_json(const RunResult& run, const core::Options& opts) 
     return out;
 }
 
-inline std::string csv_cell(std::string value) {
-    if (!value.empty() && (value[0] == '=' || value[0] == '+' || value[0] == '-' ||
-                           value[0] == '@' || value[0] == '\t' || value[0] == '\r'))
-        value.insert(value.begin(), '\'');
-    bool quote = value.find_first_of(",\"\r\n") != std::string::npos;
-    if (!quote) return value;
-    std::string out = "\"";
-    for (char c : value) { if (c == '\"') out += '\"'; out += c; }
-    return out + "\"";
-}
-
 inline std::string join(const std::vector<std::string>& values, const char* separator) {
     std::string out;
     for (size_t i = 0; i < values.size(); ++i) out += (i ? separator : "") + values[i];
@@ -374,10 +338,12 @@ inline std::string join(const std::vector<std::string>& values, const char* sepa
 inline std::string samples_csv(const RunResult& run) {
     std::string out = "path,sha256,is_pe,analysis_status,score,verdict,duplicate_id,cluster_id,error\r\n";
     for (const auto& s : run.state.samples)
-        out += csv_cell(s.path) + "," + s.sha256 + "," + (s.is_pe ? "1" : "0") + "," +
-               shown_status(s) + "," + (s.has_score ? std::to_string(s.score) : "") + "," +
-               csv_cell(s.verdict) + "," + s.duplicate_id + "," + s.cluster_id + "," +
-               csv_cell(s.error) + "\r\n";
+        out += output::csv_cell(s.path) + "," + output::csv_cell(s.sha256) + "," +
+               (s.is_pe ? "1" : "0") + "," + output::csv_cell(shown_status(s)) + "," +
+               (s.has_score ? std::to_string(s.score) : "") + "," +
+               output::csv_cell(s.verdict) + "," + output::csv_cell(s.duplicate_id) + "," +
+               output::csv_cell(s.cluster_id) + "," +
+               output::csv_cell(s.error) + "\r\n";
     return out;
 }
 
@@ -387,18 +353,20 @@ inline std::string clusters_csv(const RunResult& run) {
     std::string out = "cluster_id,representative_sha256,member_sha256,paths,similarity,evidence\r\n";
     for (const auto& c : run.clusters)
         for (const auto& m : c.members)
-            out += c.id + "," + c.representative + "," + m.sha256 + "," +
-                   csv_cell(join(paths[m.sha256], " | ")) + "," + std::to_string(m.similarity) + "," +
-                   csv_cell(join(m.evidence, " | ")) + "\r\n";
+            out += output::csv_cell(c.id) + "," + output::csv_cell(c.representative) + "," +
+                   output::csv_cell(m.sha256) + "," +
+                   output::csv_cell(join(paths[m.sha256], " | ")) + "," + std::to_string(m.similarity) + "," +
+                   output::csv_cell(join(m.evidence, " | ")) + "\r\n";
     return out;
 }
 
 inline std::string iocs_csv(const RunResult& run) {
     std::string out = "type,value,paths,lookup_status,found,score,summary,error\r\n";
     for (const auto& r : run.iocs)
-        out += r.type + "," + csv_cell(r.value) + "," + csv_cell(join(r.paths, " | ")) + "," +
-               r.lookup_status + "," + (r.found ? "1" : "0") + "," + std::to_string(r.score) + "," +
-               csv_cell(r.summary) + "," + csv_cell(r.error) + "\r\n";
+        out += output::csv_cell(r.type) + "," + output::csv_cell(r.value) + "," +
+               output::csv_cell(join(r.paths, " | ")) + "," + output::csv_cell(r.lookup_status) + "," +
+               (r.found ? "1" : "0") + "," + std::to_string(r.score) + "," +
+               output::csv_cell(r.summary) + "," + output::csv_cell(r.error) + "\r\n";
     return out;
 }
 
@@ -418,12 +386,12 @@ inline bool write_outputs(RunResult& run, const core::Options& opts, std::string
 
     run.public_json = public_json(run, opts);
     run.report_path = (workspace / "report.html").string();
-    if (!write_atomic(workspace / "case.json", run.public_json, error)) return false;
-    if (!write_atomic(workspace / "samples.csv", samples_csv(run), error)) return false;
-    if (!write_atomic(workspace / "clusters.csv", clusters_csv(run), error)) return false;
-    if (!write_atomic(workspace / "iocs.csv", iocs_csv(run), error)) return false;
-    if (!write_atomic(workspace / "report.html", report_html(run.public_json), error)) return false;
-    if (!write_atomic(workspace / ".horus" / "state.json", state_json(run.state), error)) return false;
+    if (!output::write_atomic(workspace / "case.json", run.public_json, error)) return false;
+    if (!output::write_atomic(workspace / "samples.csv", samples_csv(run), error)) return false;
+    if (!output::write_atomic(workspace / "clusters.csv", clusters_csv(run), error)) return false;
+    if (!output::write_atomic(workspace / "iocs.csv", iocs_csv(run), error)) return false;
+    if (!output::write_atomic(workspace / "report.html", report_html(run.public_json), error)) return false;
+    if (!output::write_atomic(workspace / ".horus" / "state.json", state_json(run.state), error)) return false;
     return true;
 }
 

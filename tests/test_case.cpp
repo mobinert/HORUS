@@ -69,6 +69,7 @@ int main(int argc, char** argv) {
     CHECK(find_sample(first, "text sample.txt") != nullptr);
     CHECK(find_sample(first, "text sample.txt")->status == "unknown");
     CHECK(first.public_json.find(samples.string()) == std::string::npos);
+    CHECK(first.public_json.find("malware_family") == std::string::npos);
     CHECK(json::parse(first.public_json)["schema"].as_string() == "horus-case/v1");
 
     const std::string payload = "</script><script>alert(1)</script>";
@@ -85,11 +86,34 @@ int main(int argc, char** argv) {
     CHECK(second.reused == 6);
     CHECK(!second.clusters.empty() && second.clusters[0].id == cluster_id);
 
+    fs::path moved_workspace = root / "workspace-moved";
+    fs::copy(workspace, moved_workspace, fs::copy_options::recursive, ec);
+    CHECK(!ec);
+    core::Options moved = opts;
+    moved.case_out = moved_workspace.string();
+    casework::RunResult moved_run;
+    CHECK(casework::build(moved, moved_run, error));
+    CHECK(moved_run.state.id == case_id);
+    CHECK(moved_run.reused == 6);
+
     core::Options verify = opts;
     verify.verify = true;
     casework::RunResult checked;
     CHECK(casework::build(verify, checked, error));
     CHECK(checked.reused == 6);
+
+    { std::ofstream f(samples / "new sample.txt", std::ios::binary); f << "new"; }
+    casework::RunResult added;
+    CHECK(casework::build(opts, added, error));
+    CHECK(find_sample(added, "new sample.txt") != nullptr);
+    CHECK(added.analyzed >= 1);
+
+    core::Options rebuild = opts;
+    rebuild.rebuild = true;
+    casework::RunResult rebuilt;
+    CHECK(casework::build(rebuild, rebuilt, error));
+    CHECK(rebuilt.reused == 0);
+    CHECK(rebuilt.analyzed == 7);
 
     { std::ofstream f(samples / "text sample.txt", std::ios::binary | std::ios::trunc); f << "changed"; }
     casework::RunResult changed;
@@ -108,6 +132,60 @@ int main(int argc, char** argv) {
     casework::RunResult pruned;
     CHECK(casework::build(prune, pruned, error));
     CHECK(find_sample(pruned, "text sample.txt") == nullptr);
+
+    auto make_pair = [&](const std::string& mode, const std::string& imp_b,
+                         const std::string& rich_b, const std::string& sections_b) {
+        std::vector<casework::Sample> pair(2);
+        pair[0].path = "a"; pair[0].sha256 = fake_sha(1001); pair[0].is_pe = true;
+        pair[0].imphash = "imp-a"; pair[0].rich_hash = "rich-a"; pair[0].section_fingerprint = "sec-a";
+        pair[1].path = "b"; pair[1].sha256 = fake_sha(1002); pair[1].is_pe = true;
+        pair[1].imphash = imp_b; pair[1].rich_hash = rich_b; pair[1].section_fingerprint = sections_b;
+        int ids = 0;
+        return casework::build_clusters(pair, mode, {}, [&] { return "preset-" + std::to_string(++ids); });
+    };
+    CHECK(make_pair("conservative", "imp-a", "rich-a", "sec-a").size() == 1);
+    CHECK(make_pair("conservative", "imp-a", "rich-a", "sec-b").empty());
+    CHECK(make_pair("balanced", "imp-a", "rich-a", "sec-b").size() == 1);
+    CHECK(make_pair("balanced", "imp-b", "rich-a", "sec-a").empty());
+    CHECK(make_pair("broad", "imp-b", "rich-a", "sec-a").size() == 1);
+
+    std::vector<casework::Sample> capability_only(2);
+    for (size_t i = 0; i < capability_only.size(); ++i) {
+        capability_only[i].path = "cap-" + std::to_string(i);
+        capability_only[i].sha256 = fake_sha(1100 + i);
+        capability_only[i].is_pe = true;
+        capability_only[i].capabilities = {"Process", "Network"};
+    }
+    CHECK(casework::build_clusters(capability_only, "broad", {}, [] { return "nope"; }).empty());
+
+    std::vector<casework::Sample> joined(4);
+    for (size_t i = 0; i < joined.size(); ++i) {
+        joined[i].path = "joined-" + std::to_string(i);
+        joined[i].sha256 = fake_sha(1200 + i);
+        joined[i].is_pe = true;
+        joined[i].imphash = "same";
+        joined[i].rich_hash = "same";
+        joined[i].section_fingerprint = "same";
+    }
+    int stable_ids = 0;
+    auto one_cluster = casework::build_clusters(joined, "balanced", {},
+        [&] { return "stable-" + std::to_string(++stable_ids); });
+    CHECK(one_cluster.size() == 1);
+    std::string original_id = one_cluster[0].id;
+    joined[2].imphash = joined[2].rich_hash = joined[2].section_fingerprint = "other";
+    joined[3].imphash = joined[3].rich_hash = joined[3].section_fingerprint = "other";
+    auto split = casework::build_clusters(joined, "balanced", one_cluster,
+        [&] { return "stable-" + std::to_string(++stable_ids); });
+    CHECK(split.size() == 2);
+    int carried = 0;
+    for (const auto& cluster : split) if (cluster.id == original_id) ++carried;
+    CHECK(carried == 1);
+    for (auto& sample : joined)
+        sample.imphash = sample.rich_hash = sample.section_fingerprint = "merged";
+    auto merged = casework::build_clusters(joined, "balanced", split,
+        [&] { return "stable-" + std::to_string(++stable_ids); });
+    CHECK(merged.size() == 1);
+    CHECK(merged[0].id == std::min(split[0].id, split[1].id));
 
     std::vector<casework::Sample> synthetic;
     synthetic.reserve(5000);

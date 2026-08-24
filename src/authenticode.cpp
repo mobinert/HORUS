@@ -3,9 +3,7 @@
 // ---------------------------------------------------------------------------
 #include "authenticode.hpp"
 
-// Catalog verification (CryptCATAdminAcquireContext2 etc.) needs a Win8+ SDK
-// surface; the rest of the tool builds against the Win7 baseline, so raise the
-// target for this translation unit only.
+// Catalog verification uses the current Windows trust API surface.
 #ifdef _WIN32_WINNT
 #  undef _WIN32_WINNT
 #endif
@@ -93,7 +91,7 @@ static std::string extract_signer(const std::wstring& path, std::string& issuer_
 // Fall back to the security catalogs (how most OS binaries are signed - they
 // carry no embedded certificate). Locate the catalog whose hash matches this
 // file, then verify against it and read the catalog's signer.
-static bool verify_catalog(const std::wstring& path, Result& r) {
+static bool verify_catalog(const std::wstring& path, Result& r, bool online_revocation) {
     HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ,
                                FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -135,10 +133,12 @@ static bool verify_catalog(const std::wstring& path, Result& r) {
                     WINTRUST_DATA wd = {0};
                     wd.cbStruct            = sizeof(wd);
                     wd.dwUIChoice          = WTD_UI_NONE;
-                    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+                    wd.fdwRevocationChecks = online_revocation ? WTD_REVOKE_WHOLECHAIN : WTD_REVOKE_NONE;
                     wd.dwUnionChoice       = WTD_CHOICE_CATALOG;
                     wd.pCatalog            = &wci;
                     wd.dwStateAction       = WTD_STATEACTION_VERIFY;
+                    wd.dwProvFlags         = WTD_SAFER_FLAG |
+                        (online_revocation ? WTD_REVOCATION_CHECK_CHAIN : WTD_CACHE_ONLY_URL_RETRIEVAL);
 
                     LONG st = WinVerifyTrust(reinterpret_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
                     wd.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -148,7 +148,9 @@ static bool verify_catalog(const std::wstring& path, Result& r) {
                     r.catalog = true;
                     if (st == 0) {
                         r.status = Status::Valid;
-                        r.status_text = "valid, catalog-signed";
+                        r.status_text = online_revocation
+                            ? "valid, catalog-signed with online revocation check"
+                            : "valid, catalog-signed using cached trust data; revocation not checked";
                     } else if (static_cast<DWORD>(st) == TRUST_E_BAD_DIGEST) {
                         r.status = Status::Invalid;
                         r.status_text = "catalog digest mismatch - file altered";
@@ -173,9 +175,11 @@ static bool verify_catalog(const std::wstring& path, Result& r) {
     return matched;
 }
 
-Result verify(const std::string& path_utf8, bool has_embedded_cert) {
+Result verify(const std::string& path_utf8, bool has_embedded_cert,
+              bool online_revocation) {
     Result r;
     r.embedded = has_embedded_cert;
+    r.revocation_checked = online_revocation;
     std::wstring path = widen(path_utf8);
 
     WINTRUST_FILE_INFO fi = {0};
@@ -186,11 +190,12 @@ Result verify(const std::string& path_utf8, bool has_embedded_cert) {
     WINTRUST_DATA wd = {0};
     wd.cbStruct            = sizeof(wd);
     wd.dwUIChoice          = WTD_UI_NONE;
-    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+    wd.fdwRevocationChecks = online_revocation ? WTD_REVOKE_WHOLECHAIN : WTD_REVOKE_NONE;
     wd.dwUnionChoice       = WTD_CHOICE_FILE;
     wd.pFile               = &fi;
     wd.dwStateAction       = WTD_STATEACTION_VERIFY;
-    wd.dwProvFlags         = WTD_SAFER_FLAG;
+    wd.dwProvFlags         = WTD_SAFER_FLAG |
+        (online_revocation ? WTD_REVOCATION_CHECK_CHAIN : WTD_CACHE_ONLY_URL_RETRIEVAL);
 
     LONG st = WinVerifyTrust(reinterpret_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
 
@@ -200,7 +205,9 @@ Result verify(const std::string& path_utf8, bool has_embedded_cert) {
     switch (static_cast<DWORD>(st)) {
         case 0:
             r.status = Status::Valid;
-            r.status_text = "valid, chains to a trusted root";
+            r.status_text = online_revocation
+                ? "valid, chain and revocation checked online"
+                : "valid using cached trust data; revocation not checked";
             break;
         case TRUST_E_NOSIGNATURE:
             if (has_embedded_cert) {
@@ -247,7 +254,7 @@ Result verify(const std::string& path_utf8, bool has_embedded_cert) {
 
     // No embedded signature? Most Windows binaries are catalog-signed instead.
     if (r.status == Status::NotSigned)
-        verify_catalog(path, r);
+        verify_catalog(path, r, online_revocation);
 
     if (has_embedded_cert)
         r.signer = extract_signer(path, r.issuer);

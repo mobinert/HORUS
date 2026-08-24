@@ -11,6 +11,7 @@
 #include "core.hpp"
 #include "intel.hpp"
 #include "json.hpp"
+#include "output.hpp"
 
 #include <string>
 #include <vector>
@@ -76,9 +77,8 @@ inline Store load(const std::string& path) {
 }
 inline Store load() { return load(cache_path()); }
 
-inline void save(const Store& m, const std::string& path) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return;
+inline bool save(const Store& m, const std::string& path) {
+    std::ostringstream f;
     f << "{\n";
     size_t i = 0;
     for (auto& kv : m) {
@@ -105,8 +105,10 @@ inline void save(const Store& m, const std::string& path) {
         f << "]}" << (++i < m.size() ? "," : "") << "\n";
     }
     f << "}\n";
+    std::string error;
+    return output::write_atomic(path, f.str(), error);
 }
-inline void save(const Store& m) { save(m, cache_path()); }
+inline bool save(const Store& m) { return save(m, cache_path()); }
 
 inline bool fresh(const Store& m, const std::string& key, int ttl_hours,
                   std::vector<intel::SourceResult>& out) {
@@ -121,26 +123,32 @@ inline bool fresh(const Store& m, const std::string& key, int ttl_hours,
 // Indicator enrichment with the on-disk cache in front of it.
 inline core::IndicatorReport enrich_cached(const core::Options& opts) {
     core::IndicatorReport rep;
-    rep.target = opts.target;
-    rep.type   = classify(opts.target);
+    rep.target = detail::trim(opts.target);
+    rep.type   = classify(rep.target);
     if (rep.type == IocType::Unknown) {
         rep.ok = false;
+        rep.analysis_status = core::AnalysisStatus::Error;
         rep.error = "'" + opts.target + "' is neither a readable file nor a recognised indicator.";
         return rep;
     }
+    if (!opts.enrich) return rep;
 
-    std::string key = keyof(opts.target);
+    std::string key = keyof(rep.target);
     Store store = load();
     std::vector<intel::SourceResult> cached;
     if (fresh(store, key, opts.cache_ttl_hours, cached)) {
         rep.results = cached;
-        rep.worst   = core::compute_worst(rep.results);
+        core::finalize_indicator(rep);
         return rep;
     }
 
     auto sources = core::build_sources(opts);
-    rep.results  = intel::enrich(sources, opts.target, rep.type);
-    rep.worst    = core::compute_worst(rep.results);
+    if (sources.empty()) {
+        rep.source_errors.push_back("no threat-intelligence provider is configured");
+        return rep;
+    }
+    rep.results  = intel::enrich(sources, rep.target, rep.type);
+    core::finalize_indicator(rep);
 
     // only cache a query that actually reached a source
     bool worth_caching = false;

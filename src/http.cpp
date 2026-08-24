@@ -43,7 +43,7 @@ std::string last_error(const char* stage) {
 Response perform(const Request& req) {
     Response resp;
 
-    WinHttpHandle session(WinHttpOpen(L"ARGUS/1.0 (threat-intel CLI)",
+    WinHttpHandle session(WinHttpOpen(L"HORUS/4.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0));
@@ -101,6 +101,14 @@ Response perform(const Request& req) {
         }
         if (available == 0) break;
 
+        size_t remaining = req.max_response_bytes >= resp.body.size()
+                         ? req.max_response_bytes - resp.body.size() : 0;
+        if (static_cast<size_t>(available) > remaining) {
+            resp.error = "HTTP response exceeds " +
+                         std::to_string(req.max_response_bytes) + " bytes";
+            return resp;
+        }
+
         std::vector<char> chunk(available);
         DWORD read = 0;
         if (!WinHttpReadData(request.h, chunk.data(), available, &read)) {
@@ -108,7 +116,7 @@ Response perform(const Request& req) {
             return resp;
         }
         if (read == 0) break;
-        resp.body.append(chunk.data(), read);
+        if (!append_limited(resp, chunk.data(), read, req.max_response_bytes)) return resp;
     }
 
     resp.ok = true;

@@ -33,13 +33,15 @@ struct Result {
     std::string issuer;     // issuer CN
     bool        embedded = false;   // signature was embedded in the PE
     bool        catalog  = false;   // verified via a security catalog instead
+    bool        revocation_checked = false;
 };
 
 const char* status_label(Status s);
 
 // Verify the file at `path` (UTF-8). `has_embedded_cert` comes from the PE
 // parser and separates "genuinely unsigned" from "signature present but failed".
-Result verify(const std::string& path_utf8, bool has_embedded_cert);
+Result verify(const std::string& path_utf8, bool has_embedded_cert,
+              bool online_revocation = false);
 
 } // namespace authcode
 } // namespace horus

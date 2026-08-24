@@ -25,6 +25,12 @@ int main(){
     CHECK(o.abuse_key == "XYZ");
     CHECK(o.cache_ttl_hours == 12);
 
+    core::Options off;
+    off.cache_ttl_hours = 0;
+    off.cache_ttl_set = true;
+    config::apply(off, c);
+    CHECK(off.cache_ttl_hours == 0);
+
     // malformed file must not throw and must not report loaded
     { std::ofstream f(p, std::ios::binary); f << "{ this is not json"; }
     config::Config bad = config::load(p);

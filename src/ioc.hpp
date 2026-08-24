@@ -154,6 +154,62 @@ namespace detail {
         return true;
     }
 
+    inline bool valid_port(const std::string& s) {
+        if (s.empty() || s.size() > 5) return false;
+        unsigned port = 0;
+        for (char c : s) {
+            if (!std::isdigit((unsigned char)c)) return false;
+            port = port * 10 + static_cast<unsigned>(c - '0');
+        }
+        return port > 0 && port <= 65535;
+    }
+
+    inline bool valid_host_label(const std::string& host) {
+        if (host.empty() || host.size() > 253 || host.front() == '-' || host.back() == '-')
+            return false;
+        for (char c : host)
+            if (!(std::isalnum((unsigned char)c) || c == '-' || c == '.')) return false;
+        return host.front() != '.' && host.back() != '.' && host.find("..") == std::string::npos;
+    }
+
+    inline bool is_url(const std::string& s) {
+        for (char c : s) if ((unsigned char)c <= 0x20) return false;
+
+        std::string lower = s;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c){ return (char)std::tolower(c); });
+        size_t start = 0;
+        if (lower.rfind("http://", 0) == 0) start = 7;
+        else if (lower.rfind("https://", 0) == 0) start = 8;
+        else if (lower.rfind("ftp://", 0) == 0) start = 6;
+        else return false;
+
+        size_t end = s.find_first_of("/?#", start);
+        std::string authority = s.substr(start, end == std::string::npos ? end : end - start);
+        if (authority.empty()) return false;
+
+        size_t at = authority.rfind('@');
+        if (at != std::string::npos) {
+            if (at == 0 || at + 1 == authority.size() || authority.find('@') != at) return false;
+            authority.erase(0, at + 1);
+        }
+
+        if (authority.front() == '[') {
+            size_t close = authority.find(']');
+            if (close == std::string::npos || !is_ipv6(authority.substr(1, close - 1))) return false;
+            if (close + 1 == authority.size()) return true;
+            return authority[close + 1] == ':' && valid_port(authority.substr(close + 2));
+        }
+
+        std::string host = authority;
+        size_t colon = authority.rfind(':');
+        if (colon != std::string::npos) {
+            if (authority.find(':') != colon || !valid_port(authority.substr(colon + 1))) return false;
+            host = authority.substr(0, colon);
+        }
+        return is_ipv4(host) || is_domain(host) || valid_host_label(host);
+    }
+
 } // namespace detail
 
 // The one entry point. Returns the best guess at what kind of indicator the
@@ -162,16 +218,8 @@ inline IocType classify(const std::string& raw) {
     std::string s = detail::trim(raw);
     if (s.empty()) return IocType::Unknown;
 
-    // 1. URL - the only thing carrying an explicit scheme
-    {
-        std::string lower = s;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c){ return (char)std::tolower(c); });
-        if (lower.rfind("http://", 0) == 0  ||
-            lower.rfind("https://", 0) == 0 ||
-            lower.rfind("ftp://", 0) == 0)
-            return IocType::Url;
-    }
+    // 1. URL - explicit scheme plus a well-formed, non-empty authority.
+    if (detail::is_url(s)) return IocType::Url;
 
     // 2. Email - exactly one '@' with a domain-shaped right-hand side
     {
