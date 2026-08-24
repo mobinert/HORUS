@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>HORUS case report</title>
+<style>
+:root{
+  --bg:#07090f;--panel:#101521;--panel2:#151c2b;--line:#263247;
+  --text:#eef4ff;--muted:#9aa8bd;--faint:#6f7d91;--cyan:#37d4ff;
+  --violet:#aa7dff;--green:#57e39c;--amber:#ffc25c;--red:#ff657d;
+  --shadow:0 18px 55px rgba(0,0,0,.34);--radius:18px
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;min-height:100vh;background:
+  radial-gradient(circle at 12% -8%,rgba(55,212,255,.14),transparent 34%),
+  radial-gradient(circle at 90% 5%,rgba(170,125,255,.13),transparent 31%),var(--bg);
+  color:var(--text);font:14px/1.5 Inter,Segoe UI,system-ui,sans-serif}
+a{color:inherit}.skip{position:fixed;left:14px;top:-60px;z-index:20;background:var(--cyan);
+  color:#031017;padding:9px 13px;border-radius:9px;font-weight:700}.skip:focus{top:14px}
+.wrap{width:min(1480px,calc(100% - 34px));margin:0 auto;padding:34px 0 50px}
+.top{display:flex;align-items:center;gap:16px;margin-bottom:24px}.mark{display:grid;place-items:center;
+  width:48px;height:48px;border:1px solid rgba(55,212,255,.42);border-radius:15px;
+  color:var(--cyan);background:rgba(55,212,255,.08);font-size:24px;box-shadow:0 0 30px rgba(55,212,255,.12)}
+.brand{min-width:0}.brand h1{margin:0;font-size:24px;letter-spacing:4px}.brand p{margin:2px 0 0;color:var(--muted)}
+.version{margin-left:auto;border:1px solid var(--line);border-radius:999px;padding:6px 11px;color:var(--muted);white-space:nowrap}
+.case-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;padding:22px;
+  border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(145deg,rgba(21,28,43,.94),rgba(11,15,24,.94));box-shadow:var(--shadow)}
+.case-head h2{margin:0;font-size:28px;overflow-wrap:anywhere}.case-head p{margin:6px 0 0;color:var(--muted)}
+.run{text-align:right;color:var(--muted)}.run b{display:block;color:var(--cyan);font-size:20px}
+.metrics{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:11px;margin:16px 0 24px}
+.metric,.panel{border:1px solid var(--line);background:rgba(16,21,33,.88);box-shadow:var(--shadow)}
+.metric{padding:15px;border-radius:14px}.metric b{display:block;font-size:23px;line-height:1.1}.metric span{color:var(--muted);font-size:12px}
+.metric.warn b{color:var(--amber)}.metric.bad b{color:var(--red)}.metric.good b{color:var(--green)}
+.panel{border-radius:var(--radius);padding:20px;margin-top:16px;overflow:hidden}.panel h2{font-size:16px;letter-spacing:.5px;margin:0 0 14px}
+.panel-head{display:flex;align-items:end;justify-content:space-between;gap:14px;margin-bottom:14px}.panel-head h2{margin:0}
+.sub{color:var(--muted);font-size:12px}.controls{display:flex;flex-wrap:wrap;gap:9px}
+label{display:grid;gap:4px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+input,select{min-width:160px;border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#0c111c;color:var(--text);font:inherit}
+input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.cluster{border:1px solid var(--line);border-radius:14px;padding:15px;background:var(--panel2)}
+.cluster-top{display:flex;align-items:center;justify-content:space-between;gap:12px}.cluster h3{margin:0;font-size:14px;color:var(--cyan)}
+.pill{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:11px;color:var(--muted)}
+.member{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:10px 0;border-top:1px solid rgba(38,50,71,.7)}
+.member:first-of-type{margin-top:9px}.mono{font-family:Cascadia Mono,Consolas,monospace;overflow-wrap:anywhere}.why{color:var(--muted);font-size:11px;margin-top:3px}
+.score{font-weight:700;color:var(--violet)}.empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:13px}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:13px}table{width:100%;border-collapse:collapse;min-width:820px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid rgba(38,50,71,.7);vertical-align:top}th{position:sticky;top:0;background:#111827;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+tbody tr:hover{background:rgba(55,212,255,.035)}tbody tr:last-child td{border-bottom:0}
+.verdict{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap}
+.v-clean{background:rgba(87,227,156,.12);color:var(--green)}.v-low{background:rgba(55,212,255,.12);color:var(--cyan)}
+.v-suspicious{background:rgba(255,194,92,.14);color:var(--amber)}.v-malicious{background:rgba(255,101,125,.14);color:var(--red)}
+.v-unknown,.v-missing,.v-skipped,.v-error{background:rgba(154,168,189,.12);color:var(--muted)}
+.attack{display:flex;flex-wrap:wrap;gap:7px}.attack .pill{color:var(--violet);background:rgba(170,125,255,.08)}
+.foot{text-align:center;color:var(--faint);font-size:11px;margin-top:26px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:1050px){.metrics{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:760px){.wrap{width:min(100% - 20px,1480px);padding-top:20px}.top{align-items:flex-start}.version{display:none}.case-head{grid-template-columns:1fr}.run{text-align:left}.metrics{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.panel-head{align-items:stretch;flex-direction:column}.controls{display:grid;grid-template-columns:1fr 1fr}.controls label,.controls input,.controls select{width:100%;min-width:0}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#content">Skip to report</a>
+<div class="wrap">
+  <header class="top">
+    <div class="mark" aria-hidden="true">🔱</div>
+    <div class="brand"><h1>HORUS</h1><p>persistent malware research case</p></div>
+    <div class="version">v4.0 · offline report</div>
+  </header>
+  <main id="content" tabindex="-1">
+    <section class="case-head" aria-labelledby="case-name">
+      <div><h2 id="case-name">Loading case…</h2><p id="case-meta"></p></div>
+      <div class="run"><span>Case refresh</span><b id="case-run">—</b></div>
+    </section>
+    <section class="metrics" id="metrics" aria-label="Case summary"></section>
+    <section class="panel" aria-labelledby="cluster-heading"><div class="panel-head"><div><h2 id="cluster-heading">Similarity clusters</h2><div class="sub">Heuristic relationships, not malware-family attribution</div></div></div><div class="grid" id="clusters"></div></section>
+    <section class="panel" aria-labelledby="duplicate-heading"><h2 id="duplicate-heading">Exact duplicates</h2><div class="grid" id="duplicates"></div></section>
+    <section class="panel" aria-labelledby="sample-heading">
+      <div class="panel-head"><div><h2 id="sample-heading">Samples</h2><div class="sub" id="sample-count" aria-live="polite"></div></div>
+        <div class="controls"><label>Search<input id="search" type="search" placeholder="Path, hash, cluster…"></label><label>Verdict<select id="verdict-filter"><option value="">All verdicts</option></select></label><label>Status<select id="status-filter"><option value="">All statuses</option></select></label></div>
+      </div>
+      <div class="table-wrap"><table><caption class="sr-only">Analyzed case samples</caption><thead><tr><th>Sample</th><th>Status</th><th>Verdict</th><th>Score</th><th>SHA-256</th><th>Relationship</th></tr></thead><tbody id="samples"></tbody></table></div>
+    </section>
+    <section class="panel" aria-labelledby="ioc-heading"><h2 id="ioc-heading">Indicators and hash pivots</h2><div class="table-wrap"><table><caption class="sr-only">Extracted indicators and provider lookups</caption><thead><tr><th>Type</th><th>Value</th><th>Seen in</th><th>Lookup</th><th>Score</th><th>Summary</th></tr></thead><tbody id="iocs"></tbody></table></div></section>
+    <section class="panel" aria-labelledby="attack-heading"><h2 id="attack-heading">MITRE ATT&amp;CK coverage</h2><div class="attack" id="attack"></div></section>
+    <div id="fatal" role="alert" aria-live="assertive"></div>
+  </main>
+  <footer class="foot">built locally · relative paths only · samples were not copied or executed</footer>
+</div>
+<script>
+"use strict";
+const PAYLOAD="__HORUS_CASE_B64__";
+const node=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n};
+const add=(parent,...children)=>{children.forEach(child=>parent.appendChild(child));return parent};
+function decodeCase(){const raw=atob(PAYLOAD),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);return JSON.parse(new TextDecoder().decode(bytes))}
+function verdictClass(value){const v=String(value||"unknown").toLowerCase();if(v.includes("malicious"))return"v-malicious";if(v.includes("suspicious"))return"v-suspicious";if(v.includes("low"))return"v-low";if(v==="clean")return"v-clean";return"v-unknown"}
+function badge(value,extra){return node("span","verdict "+(extra||verdictClass(value)),value||"—")}
+function empty(text){return node("div","empty",text)}
+function renderMetric(label,value,tone){const card=node("div","metric "+(tone||""));add(card,node("b",null,value),node("span",null,label));return card}
+function pathList(paths){const box=node("div","why");(paths||[]).forEach(path=>box.appendChild(node("div","mono",path)));return box}
+function renderClusters(report,byHash){const root=document.getElementById("clusters");if(!report.clusters.length){root.appendChild(empty("No PE similarity clusters in this case."));return}report.clusters.forEach(cluster=>{const card=node("article","cluster");const head=node("div","cluster-top");add(head,node("h3",null,cluster.id),node("span","pill",cluster.members.length+" unique samples"));card.appendChild(head);card.appendChild(node("div","why mono","representative "+cluster.representative));cluster.members.forEach(member=>{const row=node("div","member"),left=node("div"),sample=byHash.get(member.sha256);left.appendChild(node("div","mono",member.sha256));if(sample)left.appendChild(pathList(sample.map(s=>s.path)));left.appendChild(node("div","why",(member.evidence||[]).join(" · ")));add(row,left,node("div","score",member.similarity+"%"));card.appendChild(row)});root.appendChild(card)})}
+function renderDuplicates(report){const root=document.getElementById("duplicates");if(!report.duplicates.length){root.appendChild(empty("No byte-for-byte duplicate groups."));return}report.duplicates.forEach(group=>{const card=node("article","cluster");const head=node("div","cluster-top");add(head,node("h3",null,group.id),node("span","pill",group.paths.length+" files"));add(card,head,node("div","why mono",group.sha256),pathList(group.paths));root.appendChild(card)})}
+function fillSelect(id,values){const select=document.getElementById(id);[...new Set(values.filter(Boolean))].sort().forEach(value=>{const option=node("option",null,value);option.value=value;select.appendChild(option)})}
+function renderSamples(report){const body=document.getElementById("samples"),search=document.getElementById("search").value.trim().toLowerCase(),vf=document.getElementById("verdict-filter").value,sf=document.getElementById("status-filter").value;const rows=report.samples.filter(s=>{const hay=[s.path,s.hashes.sha256,s.cluster_id,s.duplicate_id].join(" ").toLowerCase();return(!search||hay.includes(search))&&(!vf||s.verdict===vf)&&(!sf||s.analysis_status===sf)});body.replaceChildren();rows.forEach(sample=>{const tr=node("tr"),relation=sample.cluster_id||sample.duplicate_id||"—";add(tr,node("td","mono",sample.path),add(node("td"),badge(sample.analysis_status,"v-"+sample.analysis_status)),add(node("td"),badge(sample.verdict)),node("td","score",sample.score==null?"—":sample.score),node("td","mono",sample.hashes.sha256||"—"),node("td","mono",relation));body.appendChild(tr)});document.getElementById("sample-count").textContent=rows.length+" of "+report.samples.length+" shown"}
+function renderIocs(report){const body=document.getElementById("iocs");if(!report.iocs.length){const tr=node("tr"),td=node("td",null,"No indicators collected.");td.colSpan=6;tr.appendChild(td);body.appendChild(tr);return}report.iocs.forEach(record=>{const tr=node("tr");add(tr,node("td",null,record.type),node("td","mono",record.value),node("td",null,record.paths.length),node("td",null,record.lookup_status),node("td","score",record.score),node("td",null,record.summary||record.error||"—"));body.appendChild(tr)})}
+function renderAttack(report){const counts=new Map;report.samples.forEach(sample=>(sample.attack||[]).forEach(id=>counts.set(id,(counts.get(id)||0)+1)));const root=document.getElementById("attack");if(!counts.size){root.appendChild(empty("No mapped techniques in active PE samples."));return}[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).forEach(([id,count])=>root.appendChild(node("span","pill",id+" · "+count)))}
+function render(report){document.getElementById("case-name").textContent=report.case.name;document.getElementById("case-meta").textContent=report.case.id+" · updated "+report.case.updated+" · "+report.settings.cluster_mode+" clustering";document.getElementById("case-run").textContent="#"+report.case.run;const s=report.summary,metrics=document.getElementById("metrics");add(metrics,renderMetric("samples",s.total),renderMetric("complete",s.complete,"good"),renderMetric("flagged",s.flagged,s.flagged?"bad":"good"),renderMetric("unknown",s.unknown,"warn"),renderMetric("duplicates",s.duplicates),renderMetric("clusters",s.clusters),renderMetric("reused",s.reused));const byHash=new Map;report.samples.forEach(sample=>{if(!byHash.has(sample.hashes.sha256))byHash.set(sample.hashes.sha256,[]);byHash.get(sample.hashes.sha256).push(sample)});renderClusters(report,byHash);renderDuplicates(report);fillSelect("verdict-filter",report.samples.map(s=>s.verdict));fillSelect("status-filter",report.samples.map(s=>s.analysis_status));["search","verdict-filter","status-filter"].forEach(id=>document.getElementById(id).addEventListener(id==="search"?"input":"change",()=>renderSamples(report)));renderSamples(report);renderIocs(report);renderAttack(report)}
+try{render(decodeCase())}catch(error){const fatal=document.getElementById("fatal");fatal.className="panel";fatal.textContent="Could not read this case report: "+error.message}
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+#pragma once
+
+#include <cstddef>
+
+namespace horus {
+namespace gui {
+
+inline constexpr unsigned char kCaseHtmlBytes[] = { @HORUS_CASE_BYTES@ };
+inline constexpr std::size_t kCaseHtmlSize = sizeof(kCaseHtmlBytes);
+inline const char* kCaseHtml = reinterpret_cast<const char*>(kCaseHtmlBytes);
+
+} // namespace gui
+} // namespace horus

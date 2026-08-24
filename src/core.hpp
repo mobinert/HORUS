@@ -42,7 +42,7 @@ struct Options {
     bool help     = false;
     bool profile  = false;
 
-    // v3 additions
+    // folder and report modes
     std::string scan_dir;          // --scan <dir>
     std::string diff_a, diff_b;    // --diff a b
     std::string csv_out;           // --csv <file>
@@ -52,6 +52,19 @@ struct Options {
     bool recurse = true;           // scan recurses by default
     int  cache_ttl_hours = 0;      // 0 = intel cache off
     std::string html_out;          // --html <file>: write the glass report, no browser
+
+    // v4 persistent case analysis
+    std::string case_dir;
+    std::string case_out;
+    std::string case_name;
+    std::string cluster_mode = "balanced";
+    bool verify = false;
+    bool rebuild = false;
+    bool prune = false;
+    bool enrich = false;
+    bool online_trust = false;
+    int max_lookups = 100;
+    uint64_t max_file_mb = 512;
 };
 
 // ---- small shared helpers -------------------------------------------------

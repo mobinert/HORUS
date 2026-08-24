@@ -16,6 +16,11 @@ string(REGEX REPLACE "(..)" "0x\\1," HORUS_UI_BYTES "${HORUS_UI_HEX}")
 configure_file("${CMAKE_SOURCE_DIR}/src/gui/ui_html.hpp.in"
                "${HORUS_GEN}/gui/ui_html.hpp" @ONLY)
 
+file(READ "${CMAKE_SOURCE_DIR}/src/gui/case.html" HORUS_CASE_HEX HEX)
+string(REGEX REPLACE "(..)" "0x\\1," HORUS_CASE_BYTES "${HORUS_CASE_HEX}")
+configure_file("${CMAKE_SOURCE_DIR}/src/gui/case_html.hpp.in"
+               "${HORUS_GEN}/gui/case_html.hpp" @ONLY)
+
 # ---- shared analysis engine (the bits that need their own .cpp) -------------
 add_library(horus_core STATIC
     src/crypto.cpp
@@ -36,6 +41,7 @@ set(GUI_LIBS shell32 comdlg32 user32)
 
 # ---- horus-cli.exe : pure command line, zero third-party deps ---------------
 add_executable(horus-cli src/main_cli.cpp src/horus.rc)
+target_include_directories(horus-cli PRIVATE "${HORUS_GEN}")
 target_link_libraries(horus-cli PRIVATE horus_core)
 
 # ---- horus.exe : unified build (CLI by default, --gui opens the glass UI) ----
@@ -66,7 +72,7 @@ option(BUILD_TESTING "Build the unit tests" ON)
 if(BUILD_TESTING)
     enable_testing()
     set(HORUS_TESTS test_ioc test_json test_pe test_score test_fuzzy
-                    test_core test_config test_cache test_diff)
+                    test_core test_config test_cache test_diff test_case)
     foreach(t IN LISTS HORUS_TESTS)
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE horus_core)
@@ -76,4 +82,5 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME ${t} COMMAND ${t})
     endforeach()
+    target_link_libraries(test_case PRIVATE shell32)
 endif()

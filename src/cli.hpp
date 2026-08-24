@@ -14,6 +14,7 @@
 #include "clip.hpp"
 #include "diff.hpp"
 #include "batch.hpp"
+#include "case.hpp"
 #include "console.hpp"
 
 #include <iostream>
@@ -26,11 +27,23 @@ inline void usage() {
     std::cout <<
     "HORUS v3.0 - PE analysis, similarity hashing (TLSH/ssdeep), ATT&CK + GUI\n\n"
     "usage: horus <indicator-or-file> [options]\n"
+    "       horus --case <dir> [--case-out dir] [--gui]\n"
     "       horus --scan <dir> [--csv f] [--json-out f]\n"
     "       horus --diff <a> <b>\n"
     "       horus --clip\n\n"
     "  <indicator-or-file>   a hash / IP / domain / URL / email, OR a file path\n\n"
     "options:\n"
+    "  --case <dir>          create or refresh a persistent analysis case\n"
+    "  --case-out <dir>      case workspace (default: <dir>.horus-case)\n"
+    "  --case-name <name>    analyst-facing case name\n"
+    "  --cluster-mode <m>    conservative, balanced (default), or broad\n"
+    "  --verify              re-hash cached case files before reuse\n"
+    "  --rebuild             ignore cached analysis and rebuild the case\n"
+    "  --prune               drop missing files from case history\n"
+    "  --enrich              query configured providers; files are never uploaded\n"
+    "  --max-lookups <n>     live case lookup cap (default: 100)\n"
+    "  --max-file-mb <n>     per-file analysis limit (default: 512)\n"
+    "  --online-trust        allow online Authenticode revocation checks\n"
     "  --scan <dir>          triage every file in a folder, worst-first\n"
     "  --diff <a> <b>        compare two PEs (imphash / TLSH / sections)\n"
     "  --clip                read the indicator from the clipboard\n"
@@ -72,6 +85,17 @@ inline core::Options parse_args(int argc, char** argv) {
         else if (a == "--gui")               o.gui = true;
         else if (a == "--clip")              o.clip = true;
         else if (a == "--no-recurse")        o.recurse = false;
+        else if (a == "--case")              o.case_dir = next("--case");
+        else if (a == "--case-out")          o.case_out = next("--case-out");
+        else if (a == "--case-name")         o.case_name = next("--case-name");
+        else if (a == "--cluster-mode")      o.cluster_mode = next("--cluster-mode");
+        else if (a == "--verify")            o.verify = true;
+        else if (a == "--rebuild")           o.rebuild = true;
+        else if (a == "--prune")             o.prune = true;
+        else if (a == "--enrich")            o.enrich = true;
+        else if (a == "--online-trust")      o.online_trust = true;
+        else if (a == "--max-lookups")       o.max_lookups = std::atoi(next("--max-lookups").c_str());
+        else if (a == "--max-file-mb")       o.max_file_mb = std::strtoull(next("--max-file-mb").c_str(), nullptr, 10);
         else if (a == "--scan")              o.scan_dir = next("--scan");
         else if (a == "--csv")               o.csv_out  = next("--csv");
         else if (a == "--json-out")          o.json_out = next("--json-out");
@@ -103,6 +127,10 @@ inline int run(const core::Options& in) {
     if (!opts.diff_a.empty()) {
         if (!opts.json) ui::banner();
         return diffs::run(opts, opts.diff_a, opts.diff_b);
+    }
+    if (!opts.case_dir.empty()) {
+        if (!opts.json && !opts.gui) ui::banner();
+        return casework::run(opts);
     }
     if (!opts.scan_dir.empty()) {
         if (!opts.json) ui::banner();

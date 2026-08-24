@@ -12,6 +12,10 @@
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     horus::core::Options opts = horus::cli::parse_args(__argc, __argv);
+    if (!opts.case_dir.empty()) {
+        opts.gui = true;
+        return horus::cli::run(opts);
+    }
     if (!opts.html_out.empty())
         return horus::gui::write_html(opts, opts.html_out);
     return horus::gui::launch(opts);

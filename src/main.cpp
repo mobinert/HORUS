@@ -14,6 +14,9 @@ int main(int argc, char** argv) {
     if (!opts.html_out.empty())
         return horus::gui::write_html(opts, opts.html_out);
 
+    if (!opts.case_dir.empty())
+        return horus::cli::run(opts);
+
     // no args at all + launched from Explorer -> friendlier to open the GUI
     bool bare_launch = (argc == 1) && horus::gui::launched_from_gui();
 
