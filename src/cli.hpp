@@ -50,8 +50,8 @@ inline void usage() {
     "  --scan <dir>          triage every file in a folder, worst-first\n"
     "  --diff <a> <b>        compare two PEs (imphash / TLSH / sections)\n"
     "  --clip                read the indicator from the clipboard\n"
-    "  --gui                 open the generated report in the browser\n"
-    "  --html <file>         write the glass-console report to an HTML file\n"
+    "  --gui                 open a direct or case report in the browser (GUI builds)\n"
+    "  --html <file>         write a direct report to HTML (GUI builds)\n"
     "  --no-recurse          with --case/--scan, stay in the top folder only\n"
     "  --csv <file>          with --scan, also write a CSV\n"
     "  --json-out <file>     with --scan, also write a JSON array\n"
@@ -146,6 +146,10 @@ inline core::Options parse_args(int argc, char** argv) {
         argument_error("--csv and --json-out require --scan");
     if (!o.case_dir.empty() && !o.html_out.empty())
         argument_error("Case Mode always writes report.html; --html is for direct input");
+    if ((!o.scan_dir.empty() || !o.diff_a.empty()) && (o.gui || !o.html_out.empty()))
+        argument_error("--gui and --html cannot be combined with --scan or --diff");
+    if (o.gui && !o.html_out.empty())
+        argument_error("choose either --gui or --html");
     return o;
 }
 

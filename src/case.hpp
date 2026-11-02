@@ -330,6 +330,70 @@ inline void enrich_iocs(RunResult& run, const core::Options& opts) {
     }
 }
 
+inline Change make_change(const std::string& kind, const Sample* before,
+                          const Sample* after) {
+    Change change;
+    change.kind = kind;
+    change.path = after ? after->path : before->path;
+    if (before) {
+        change.has_before = true;
+        change.before_sha256 = before->sha256;
+        change.before_status = shown_status(*before);
+        change.before_has_score = !before->missing && before->has_score;
+        change.before_score = before->score;
+    }
+    if (after) {
+        change.has_after = true;
+        change.after_sha256 = after->sha256;
+        change.after_status = shown_status(*after);
+        change.after_has_score = !after->missing && after->has_score;
+        change.after_score = after->score;
+    }
+    return change;
+}
+
+// Only the latest refresh is compared. This is an additive export; the portable
+// state continues to hold the current case rather than an unbounded event log.
+inline std::vector<Change> detect_changes(const State& before, const State& after) {
+    std::map<std::string, const Sample*> old_samples, new_samples;
+    for (const auto& sample : before.samples)
+        old_samples[path_key(sample.path)] = &sample;
+    for (const auto& sample : after.samples)
+        new_samples[path_key(sample.path)] = &sample;
+
+    std::vector<Change> changes;
+    for (const auto& [key, current] : new_samples) {
+        auto it = old_samples.find(key);
+        const Sample* previous = it == old_samples.end() ? nullptr : it->second;
+        if (!previous) {
+            changes.push_back(make_change("added", nullptr, current));
+        } else if (previous->missing && !current->missing) {
+            changes.push_back(make_change("restored", previous, current));
+        } else if (!previous->missing && current->missing) {
+            changes.push_back(make_change("missing", previous, current));
+        } else if (!current->missing && (previous->size != current->size ||
+                   (!previous->sha256.empty() && !current->sha256.empty() &&
+                    previous->sha256 != current->sha256))) {
+            changes.push_back(make_change("modified", previous, current));
+        } else if (!current->missing &&
+                   (previous->status != current->status ||
+                    previous->has_score != current->has_score ||
+                    (previous->has_score && previous->score != current->score) ||
+                    previous->verdict != current->verdict ||
+                    previous->intel_summary != current->intel_summary)) {
+            changes.push_back(make_change("assessment_changed", previous, current));
+        }
+    }
+    for (const auto& [key, previous] : old_samples)
+        if (!new_samples.count(key))
+            changes.push_back(make_change("removed", previous, nullptr));
+    std::sort(changes.begin(), changes.end(), [](const Change& a, const Change& b) {
+        const std::string ak = path_key(a.path), bk = path_key(b.path);
+        return ak == bk ? a.kind < b.kind : ak < bk;
+    });
+    return changes;
+}
+
 inline bool build(const core::Options& opts, RunResult& run, std::string& error) {
     fs::path root(opts.case_dir);
     fs::path workspace = opts.case_out.empty()
@@ -450,6 +514,7 @@ inline bool build(const core::Options& opts, RunResult& run, std::string& error)
                                   [] { return guid("cluster-"); });
     run.state.clusters = run.clusters;
     run.state.iocs = run.iocs;
+    run.changes = detect_changes(old, run.state);
     return write_outputs(run, opts, error);
 }
 
@@ -498,6 +563,7 @@ inline int run(const core::Options& opts) {
         ui::kv("samples", std::to_string(result.state.samples.size()));
         ui::kv("analyzed", std::to_string(result.analyzed));
         ui::kv("reused", std::to_string(result.reused));
+        ui::kv("changes", std::to_string(result.changes.size()));
         ui::kv("duplicates", std::to_string(result.duplicates.size()));
         ui::kv("clusters", std::to_string(result.clusters.size()));
         if (opts.enrich) {

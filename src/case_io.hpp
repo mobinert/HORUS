@@ -286,7 +286,27 @@ inline std::string public_json(const RunResult& run, const core::Options& opts) 
            ",\"analyzed\":" + std::to_string(run.analyzed) +
            ",\"reused\":" + std::to_string(run.reused) +
            ",\"live_lookups\":" + std::to_string(run.live_lookups) +
-           ",\"cache_hits\":" + std::to_string(run.cache_hits) + "},\n";
+           ",\"cache_hits\":" + std::to_string(run.cache_hits) +
+           ",\"changes\":" + std::to_string(run.changes.size()) + "},\n";
+
+    out += "  \"changes\": [";
+    for (size_t i = 0; i < run.changes.size(); ++i) {
+        const auto& c = run.changes[i];
+        auto side = [](bool present, const std::string& sha256, const std::string& status,
+                       bool has_score, int score) {
+            if (!present) return std::string("null");
+            return std::string("{\"sha256\":") + q(sha256) +
+                   ",\"status\":" + q(status) +
+                   ",\"score\":" + (has_score ? std::to_string(score) : "null") + "}";
+        };
+        out += std::string(i ? "," : "") + "{\"kind\":" + q(c.kind) +
+               ",\"path\":" + q(c.path) +
+               ",\"before\":" + side(c.has_before, c.before_sha256, c.before_status,
+                                        c.before_has_score, c.before_score) +
+               ",\"after\":" + side(c.has_after, c.after_sha256, c.after_status,
+                                       c.after_has_score, c.after_score) + "}";
+    }
+    out += "],\n";
 
     out += "  \"samples\": [\n";
     for (size_t i = 0; i < run.state.samples.size(); ++i) {
@@ -370,6 +390,18 @@ inline std::string iocs_csv(const RunResult& run) {
     return out;
 }
 
+inline std::string changes_csv(const RunResult& run) {
+    std::string out = "kind,path,before_sha256,after_sha256,before_status,after_status,before_score,after_score\r\n";
+    for (const auto& c : run.changes) {
+        out += output::csv_cell(c.kind) + "," + output::csv_cell(c.path) + "," +
+               output::csv_cell(c.before_sha256) + "," + output::csv_cell(c.after_sha256) + "," +
+               output::csv_cell(c.before_status) + "," + output::csv_cell(c.after_status) + "," +
+               (c.before_has_score ? std::to_string(c.before_score) : "") + "," +
+               (c.after_has_score ? std::to_string(c.after_score) : "") + "\r\n";
+    }
+    return out;
+}
+
 inline std::string report_html(const std::string& document) {
     std::string html(gui::kCaseHtml, gui::kCaseHtmlSize);
     const std::string marker = "__HORUS_CASE_B64__";
@@ -390,6 +422,7 @@ inline bool write_outputs(RunResult& run, const core::Options& opts, std::string
     if (!output::write_atomic(workspace / "samples.csv", samples_csv(run), error)) return false;
     if (!output::write_atomic(workspace / "clusters.csv", clusters_csv(run), error)) return false;
     if (!output::write_atomic(workspace / "iocs.csv", iocs_csv(run), error)) return false;
+    if (!output::write_atomic(workspace / "changes.csv", changes_csv(run), error)) return false;
     if (!output::write_atomic(workspace / "report.html", report_html(run.public_json), error)) return false;
     if (!output::write_atomic(workspace / ".horus" / "state.json", state_json(run.state), error)) return false;
     return true;

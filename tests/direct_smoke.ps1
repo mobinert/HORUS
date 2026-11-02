@@ -14,10 +14,10 @@ function Require($condition, $message) {
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
     $version = (& $Horus --version) -join ''
-    Require ($version -eq '4.0.0') '--version did not report 4.0.0'
+    Require ($version -match '^\d+\.\d+\.\d+$') '--version did not report a semantic version'
     $help = (& $Horus --help --no-color) -join "`n"
     Require ($help.Contains('--case') -and $help.Contains('--enrich') -and
-             $help.Contains('--no-recurse') -and $help.Contains('--gui')) 'v4 options are missing from help'
+             $help.Contains('--no-recurse') -and $help.Contains('--gui')) 'expected options are missing from help'
     $sample = Join-Path $root 'sample with spaces'
     Copy-Item -LiteralPath $Horus -Destination $sample
 
@@ -32,11 +32,18 @@ try {
     Require (-not [string]::IsNullOrWhiteSpace($pe.tlsh) -and
              -not [string]::IsNullOrWhiteSpace($pe.ssdeep)) 'direct PE fuzzy hashes are missing'
 
+    $diffText = (& $Horus --diff $sample $sample --json --no-color) -join "`n"
+    $diffCode = $LASTEXITCODE
+    $diff = $diffText | ConvertFrom-Json
+    Require (($diffCode -eq 0) -or ($diffCode -eq 1)) 'JSON PE diff returned an invalid exit code'
+    Require ($diff.kind -eq 'diff' -and $diff.analysis_status -eq 'complete') 'JSON PE diff did not complete'
+    Require ($diff.comparison.sha256_match -eq $true -and $diff.comparison.tlsh_distance -eq 0) 'JSON PE diff lost identity evidence'
+
     $guiReport = Join-Path $root 'drag and drop report.html'
     & $HorusGui $sample --html $guiReport --no-color | Out-Null
     Require (($LASTEXITCODE -eq 0) -or ($LASTEXITCODE -eq 1)) 'GUI drag-and-drop argument failed'
     Require (Test-Path -LiteralPath $guiReport) 'GUI report was not written'
-    Require ([IO.File]::ReadAllText($guiReport).Contains('v4.0.0')) 'GUI did not embed the central version'
+    Require ([IO.File]::ReadAllText($guiReport).Contains("v$version")) 'GUI did not embed the central version'
 
     $plainPath = Join-Path $root 'plain file.txt'
     [IO.File]::WriteAllText($plainPath, 'plain text')
@@ -48,6 +55,12 @@ try {
     Require ($null -eq $plain.final_score) 'non-PE input received a score'
     Require ($plain.md5.Length -eq 32 -and $plain.sha1.Length -eq 40 -and
              $plain.sha256.Length -eq 64) 'non-PE inventory did not return all hashes'
+
+    $unknownDiffText = (& $Horus --diff $sample $plainPath --json --no-color) -join "`n"
+    $unknownDiffCode = $LASTEXITCODE
+    $unknownDiff = $unknownDiffText | ConvertFrom-Json
+    Require ($unknownDiffCode -eq 3) 'mixed PE/non-PE diff did not return UNKNOWN exit code 3'
+    Require ($unknownDiff.analysis_status -eq 'unknown' -and $unknownDiff.file_b.score -eq $null) 'mixed diff invented a score or comparison'
 
     $reportPath = Join-Path $root 'offline report.html'
     & $Horus $plainPath --html $reportPath --no-color | Out-Null
@@ -63,12 +76,34 @@ try {
     Require ($indicator.analysis_status -eq 'unknown') 'unenriched indicator was not UNKNOWN'
 
     $ErrorActionPreference = 'Continue'
+    $horusCli = Join-Path (Split-Path -Parent $Horus) 'horus-cli.exe'
+    Require (Test-Path -LiteralPath $horusCli) 'CLI-only binary was not built'
+    $invalidReport = Join-Path $root 'invalid mode report.html'
     & $Horus --max-file-mb nope $sample --no-color 2>$null | Out-Null
     Require ($LASTEXITCODE -eq 2) 'malformed number did not return 2'
     & $Horus --scan $plainPath --no-color 2>$null | Out-Null
     Require ($LASTEXITCODE -eq 2) '--scan accepted a regular file'
     & $Horus $plainPath $sample --no-color 2>$null | Out-Null
     Require ($LASTEXITCODE -eq 2) 'multiple direct targets were accepted'
+    & $Horus --scan $root --gui 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) '--scan with --gui was accepted'
+    & $Horus --scan $root --html $invalidReport 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) '--scan with --html was accepted'
+    & $Horus --diff $sample $sample --gui 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) '--diff with --gui was accepted'
+    & $Horus --diff $sample $sample --html $invalidReport 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) '--diff with --html was accepted'
+    & $Horus $sample --gui --html $invalidReport 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) '--gui with --html was accepted'
+    & $HorusCli $sample --gui 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) 'CLI-only binary accepted --gui'
+    & $HorusCli $sample --html $invalidReport 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) 'CLI-only binary accepted --html'
+    & $HorusGui --scan $root 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) 'GUI-only binary accepted --scan'
+    & $HorusGui --diff $sample $sample 2>$null | Out-Null
+    Require ($LASTEXITCODE -eq 2) 'GUI-only binary accepted --diff'
+    Require (-not (Test-Path -LiteralPath $invalidReport)) 'invalid mode wrote an HTML report'
     $ErrorActionPreference = 'Stop'
 
     $large = Join-Path $root 'large.bin'

@@ -192,28 +192,41 @@ public:
 
         const size_t opt = fh + 20;                // IMAGE_OPTIONAL_HEADER
         uint16_t optmagic;
-        if (!rd16(opt, optmagic))
+        if (opt > buf_.size() || opt_size > buf_.size() - opt ||
+            opt_size < sizeof(optmagic) || !rd16(opt, optmagic))
             return err(info, "truncated optional header");
 
         size_t dir_base;                           // file offset of DataDirectory[0]
         if (optmagic == constants::OPT_MAGIC_PE64) {
+            if (opt_size < 112)
+                return err(info, "truncated PE32+ optional header");
             info.is_64bit = true;
-            uint32_t ib_lo, ib_hi;
-            rd32(opt + 0x18, ib_lo); rd32(opt + 0x1C, ib_hi);
+            uint32_t ib_lo = 0, ib_hi = 0;
+            if (!rd32(opt + 0x18, ib_lo) || !rd32(opt + 0x1C, ib_hi) ||
+                !rd32(opt + 0x10, info.entry_point_rva))
+                return err(info, "truncated PE32+ optional header");
             info.image_base = ((uint64_t)ib_hi << 32) | ib_lo;
-            rd32(opt + 0x10, info.entry_point_rva);
             dir_base = opt + 112;                  // PE32+ DataDirectory
         } else if (optmagic == constants::OPT_MAGIC_PE32) {
+            if (opt_size < 96)
+                return err(info, "truncated PE32 optional header");
             info.is_64bit = false;
-            uint32_t ib; rd32(opt + 0x1C, ib);
+            uint32_t ib = 0;
+            if (!rd32(opt + 0x1C, ib) ||
+                !rd32(opt + 0x10, info.entry_point_rva))
+                return err(info, "truncated PE32 optional header");
             info.image_base = ib;
-            rd32(opt + 0x10, info.entry_point_rva);
             dir_base = opt + 96;                   // PE32 DataDirectory
         } else {
             return err(info, "unknown optional header magic");
         }
 
-        uint16_t subsys; rd16(opt + 68, subsys);
+        uint16_t subsys = 0;
+        uint32_t num_rva = 0;
+        if (!rd16(opt + 68, subsys) || !rd32(dir_base - 4, num_rva))
+            return err(info, "truncated optional header");
+        if (num_rva > (opt_size - (dir_base - opt)) / 8)
+            return err(info, "data directories exceed optional header size");
         info.subsystem = subsys;
         info.subsystem_name = subsystem_name(subsys);
 
@@ -225,38 +238,34 @@ public:
         info.overall_entropy = shannon_entropy(buf_.data(), buf_.size());
 
         // ---- imports (DataDirectory[1]) ----
-        uint32_t imp_rva = 0, imp_sz = 0;
-        rd32(dir_base + 8 * constants::DIR_IMPORT,     imp_rva);
-        rd32(dir_base + 8 * constants::DIR_IMPORT + 4, imp_sz);
+        uint32_t imp_rva = 0;
+        if (num_rva > constants::DIR_IMPORT)
+            rd32(dir_base + 8 * constants::DIR_IMPORT, imp_rva);
         if (imp_rva != 0)
             parse_imports(info, imp_rva);          // best-effort; never fatal
 
         build_imphash_string(info);
 
         // ---- resource directory (DataDirectory[2]) ----
-        rd32(dir_base + 8 * 2,     info.rsrc_rva);
-        rd32(dir_base + 8 * 2 + 4, info.rsrc_size);
+        if (num_rva > 2) {
+            rd32(dir_base + 8 * 2,     info.rsrc_rva);
+            rd32(dir_base + 8 * 2 + 4, info.rsrc_size);
+        }
 
         // ---- Authenticode (DataDirectory[4]) - just presence, not validation ----
-        uint32_t auth_sz = 0;
-        rd32(dir_base + 8 * 4 + 4, auth_sz);
-        info.has_authenticode = (auth_sz > 0);
-
-        // how many data directories the file actually declares
-        uint32_t num_rva = 0;
-        rd32(dir_base - 4, num_rva);
-
-        // ---- byte ranges the Authenticode digest skips ----
-        info.ah_checksum_off = opt + 64;
-        info.ah_secdir_off   = dir_base + 8 * 4;
-        {
+        if (num_rva > 4) {
+            // The checksum and security-directory entry are both needed to
+            // compute a meaningful Authenticode digest.
+            info.ah_checksum_off = opt + 64;
+            info.ah_secdir_off   = dir_base + 8 * 4;
             uint32_t cva = 0, csz = 0;
             rd32(dir_base + 8 * 4,     cva);   // security dir VA == raw file offset
             rd32(dir_base + 8 * 4 + 4, csz);
             info.ah_cert_off  = cva;
             info.ah_cert_size = csz;
+            info.has_authenticode = (csz > 0);
+            info.ah_ready = true;
         }
-        info.ah_ready = true;
 
         // ---- managed / .NET (dir 14) ----
         if (num_rva > 14) {
@@ -315,12 +324,12 @@ private:
 
     // ---- bounds-checked little-endian readers ----
     bool rd16(size_t off, uint16_t& out) const {
-        if (off + 2 > buf_.size()) return false;
+        if (off > buf_.size() || buf_.size() - off < 2) return false;
         out = (uint16_t)(buf_[off] | (buf_[off + 1] << 8));
         return true;
     }
     bool rd32(size_t off, uint32_t& out) const {
-        if (off + 4 > buf_.size()) return false;
+        if (off > buf_.size() || buf_.size() - off < 4) return false;
         out = (uint32_t)buf_[off] | ((uint32_t)buf_[off + 1] << 8) |
               ((uint32_t)buf_[off + 2] << 16) | ((uint32_t)buf_[off + 3] << 24);
         return true;
@@ -338,10 +347,13 @@ private:
     // table. RVAs inside the header region map 1:1.
     bool rva_to_offset(const Info& info, uint32_t rva, size_t& off) const {
         for (const auto& s : info.sections) {
-            uint32_t span = std::max(s.virtual_size, s.raw_size);
-            if (rva >= s.virtual_addr && rva < s.virtual_addr + span) {
-                off = s.raw_ptr + (rva - s.virtual_addr);
-                return off < buf_.size();
+            const uint64_t start = s.virtual_addr;
+            const uint64_t span = std::max(s.virtual_size, s.raw_size);
+            if (rva >= start && uint64_t(rva) - start < span) {
+                const uint64_t raw = uint64_t(s.raw_ptr) + (uint64_t(rva) - start);
+                if (raw >= buf_.size()) return false;
+                off = static_cast<size_t>(raw);
+                return true;
             }
         }
         if (rva < buf_.size()) { off = rva; return true; }   // header-resident
@@ -393,7 +405,11 @@ private:
         size_t desc_off;
         if (!rva_to_offset(info, import_rva, desc_off)) return;
 
+        // Bound total thunk work across all DLLs, not only per descriptor.
+        // A malformed file can otherwise repeat one table thousands of times.
+        size_t remaining_thunks = 32768;
         for (int idx = 0; idx < 4096; ++idx) {        // sane upper bound
+            if (!remaining_thunks) break;
             size_t base = desc_off + (size_t)idx * 20;
             uint32_t oft, name_rva, first;
             if (!rd32(base + 0,  oft)  ||
@@ -411,14 +427,15 @@ private:
             // the IAT (FirstThunk) when the ILT was stripped.
             uint32_t thunk_rva = oft ? oft : first;
             if (thunk_rva)
-                read_thunks(info, thunk_rva, imp);
+                read_thunks(info, thunk_rva, imp, remaining_thunks);
 
             info.total_imports += imp.functions.size();
             info.imports.push_back(std::move(imp));
         }
     }
 
-    void read_thunks(const Info& info, uint32_t thunk_rva, Import& imp) {
+    void read_thunks(const Info& info, uint32_t thunk_rva, Import& imp,
+                     size_t& remaining_thunks) {
         size_t toff;
         if (!rva_to_offset(info, thunk_rva, toff)) return;
 
@@ -426,7 +443,8 @@ private:
         const uint64_t ord_flag = is64 ? 0x8000000000000000ULL : 0x80000000ULL;
         const size_t   step     = is64 ? 8 : 4;
 
-        for (int i = 0; i < 8192; ++i) {               // sane upper bound
+        for (int i = 0; i < 8192 && remaining_thunks; ++i) {
+            --remaining_thunks;
             size_t entry = toff + (size_t)i * step;
             uint64_t val;
             if (is64) { if (!rd64(entry, val)) break; }

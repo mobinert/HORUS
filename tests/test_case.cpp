@@ -29,6 +29,12 @@ static const casework::Sample* find_sample(const casework::RunResult& run,
     return nullptr;
 }
 
+static const casework::Change* find_change(const casework::RunResult& run,
+                                           const std::string& path) {
+    for (const auto& change : run.changes) if (change.path == path) return &change;
+    return nullptr;
+}
+
 static std::string fake_sha(size_t value) {
     std::ostringstream out;
     out << std::hex << std::setfill('0') << std::setw(64) << value;
@@ -67,6 +73,8 @@ int main(int argc, char** argv) {
     CHECK(casework::build(opts, first, error));
     if (!error.empty()) std::cerr << error << "\n";
     CHECK(first.state.samples.size() == 6);
+    CHECK(first.changes.size() == 6);
+    CHECK(find_change(first, "a.exe") && find_change(first, "a.exe")->kind == "added");
     CHECK(first.duplicates.size() == 1);
     CHECK(first.duplicates[0].paths.size() == 3);
     CHECK(!first.clusters.empty());
@@ -77,6 +85,10 @@ int main(int argc, char** argv) {
     CHECK(first.public_json.find(opts.abuse_key) == std::string::npos);
     CHECK(first.public_json.find("malware_family") == std::string::npos);
     CHECK(json::parse(first.public_json)["schema"].as_string() == "horus-case/v1");
+    CHECK(json::parse(first.public_json)["changes"].items().size() == 6);
+    CHECK(json::parse(first.public_json)["summary"]["changes"].as_int() == 6);
+    CHECK(read_text(workspace / "changes.csv").find("added,a.exe") != std::string::npos);
+    CHECK(read_text(workspace / "changes.csv").find("'=formula.txt") != std::string::npos);
 
     const std::string payload = "</script><script>alert(1)</script>";
     std::string report = read_text(workspace / "report.html");
@@ -132,6 +144,8 @@ int main(int argc, char** argv) {
     CHECK(casework::build(opts, second, error));
     CHECK(second.state.id == case_id);
     CHECK(second.reused == 6);
+    CHECK(second.changes.empty());
+    CHECK(json::parse(second.public_json)["changes"].items().empty());
     CHECK(!second.clusters.empty() && second.clusters[0].id == cluster_id);
 
     fs::path moved_workspace = root / "workspace-moved";
@@ -155,6 +169,8 @@ int main(int argc, char** argv) {
     CHECK(casework::build(opts, added, error));
     CHECK(find_sample(added, "new sample.txt") != nullptr);
     CHECK(added.analyzed >= 1);
+    CHECK(find_change(added, "new sample.txt") &&
+          find_change(added, "new sample.txt")->kind == "added");
 
     core::Options rebuild = opts;
     rebuild.rebuild = true;
@@ -167,6 +183,8 @@ int main(int argc, char** argv) {
     casework::RunResult changed;
     CHECK(casework::build(opts, changed, error));
     CHECK(changed.analyzed >= 1);
+    CHECK(find_change(changed, "text sample.txt") &&
+          find_change(changed, "text sample.txt")->kind == "modified");
 
     fs::remove(samples / "text sample.txt", ec);
     CHECK(!ec);
@@ -174,12 +192,42 @@ int main(int argc, char** argv) {
     CHECK(casework::build(opts, missing, error));
     CHECK(find_sample(missing, "text sample.txt") != nullptr);
     CHECK(find_sample(missing, "text sample.txt")->missing);
+    CHECK(find_change(missing, "text sample.txt") &&
+          find_change(missing, "text sample.txt")->kind == "missing");
 
     core::Options prune = opts;
     prune.prune = true;
     casework::RunResult pruned;
     CHECK(casework::build(prune, pruned, error));
     CHECK(find_sample(pruned, "text sample.txt") == nullptr);
+    CHECK(find_change(pruned, "text sample.txt") &&
+          find_change(pruned, "text sample.txt")->kind == "removed");
+
+    casework::State before_changes, after_changes;
+    casework::Sample restored;
+    restored.path = "restored.exe";
+    restored.missing = true;
+    restored.sha256 = fake_sha(23);
+    before_changes.samples.push_back(restored);
+    restored.missing = false;
+    restored.status = "complete";
+    after_changes.samples.push_back(restored);
+    casework::Sample reassessed;
+    reassessed.path = "reassessed.exe";
+    reassessed.sha256 = fake_sha(24);
+    reassessed.status = "complete";
+    reassessed.has_score = true;
+    reassessed.score = 10;
+    reassessed.verdict = "LOW";
+    before_changes.samples.push_back(reassessed);
+    reassessed.score = 40;
+    reassessed.verdict = "SUSPICIOUS";
+    after_changes.samples.push_back(reassessed);
+    auto changes = casework::detect_changes(before_changes, after_changes);
+    CHECK(changes.size() == 2);
+    CHECK(changes[0].kind == "assessment_changed");
+    CHECK(changes[0].before_score == 10 && changes[0].after_score == 40);
+    CHECK(changes[1].kind == "restored");
 
     fs::create_directories(samples / "nested", ec);
     CHECK(!ec);
