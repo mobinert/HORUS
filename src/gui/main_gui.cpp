@@ -12,6 +12,8 @@
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     horus::core::Options opts = horus::cli::parse_args(__argc, __argv);
+    if (!opts.scan_dir.empty() || !opts.diff_a.empty())
+        horus::cli::argument_error("--scan and --diff require horus.exe or horus-cli.exe");
     if (!opts.case_dir.empty()) {
         opts.gui = true;
         return horus::cli::run(opts);

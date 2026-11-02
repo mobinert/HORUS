@@ -8,5 +8,8 @@
 #include "cli.hpp"
 
 int main(int argc, char** argv) {
-    return horus::cli::run(argc, argv);
+    horus::core::Options opts = horus::cli::parse_args(argc, argv);
+    if (opts.gui || !opts.html_out.empty())
+        horus::cli::argument_error("--gui and --html require horus.exe or horus-gui.exe");
+    return horus::cli::run(opts);
 }

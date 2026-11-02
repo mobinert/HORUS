@@ -42,6 +42,25 @@ foreach ($name in $binaries) {
     Require (-not $ascii.Contains('VCRUNTIME140_1.dll')) "$name depends on the Visual C++ redistributable"
 }
 
+$sumsPath = Join-Path $BinDir 'SHA256SUMS.txt'
+if (Test-Path -LiteralPath $sumsPath -PathType Leaf) {
+    $lines = @(Get-Content -LiteralPath $sumsPath)
+    Require ($lines.Count -eq $binaries.Count) 'SHA256SUMS.txt must list exactly three binaries'
+    $seen = @{}
+    foreach ($line in $lines) {
+        Require ($line -cmatch '^([0-9a-f]{64})  (horus(?:-cli|-gui)?\.exe)$') "invalid SHA256SUMS.txt line: $line"
+        $expectedHash = $Matches[1]
+        $name = $Matches[2]
+        Require (-not $seen.ContainsKey($name)) "duplicate SHA256SUMS.txt entry: $name"
+        $seen[$name] = $true
+        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $BinDir $name)).Hash.ToLowerInvariant()
+        Require ($actualHash -ceq $expectedHash) "SHA256SUMS.txt mismatch: $name"
+    }
+    foreach ($name in $binaries) {
+        Require ($seen.ContainsKey($name)) "SHA256SUMS.txt is missing $name"
+    }
+}
+
 $unifiedVersion = (& (Join-Path $BinDir 'horus.exe') --version) -join ''
 Require ($LASTEXITCODE -eq 0 -and $unifiedVersion -eq $ExpectedVersion) 'horus.exe --version mismatch'
 $cliVersion = (& (Join-Path $BinDir 'horus-cli.exe') --version) -join ''

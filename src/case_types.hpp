@@ -68,6 +68,21 @@ struct IocRecord {
     std::string error;
 };
 
+struct Change {
+    std::string kind;
+    std::string path;
+    bool has_before = false;
+    bool has_after = false;
+    std::string before_sha256;
+    std::string after_sha256;
+    std::string before_status;
+    std::string after_status;
+    bool before_has_score = false;
+    bool after_has_score = false;
+    int before_score = 0;
+    int after_score = 0;
+};
+
 struct State {
     int schema = 1;
     std::string id;
@@ -86,6 +101,7 @@ struct RunResult {
     std::vector<DuplicateGroup> duplicates;
     std::vector<Cluster> clusters;
     std::vector<IocRecord> iocs;
+    std::vector<Change> changes;
     std::string workspace;
     std::string report_path;
     std::string public_json;

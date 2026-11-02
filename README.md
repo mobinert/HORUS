@@ -59,6 +59,12 @@ Hand it **anything** and it figures out what to do:
 
 Direct file analysis needs no mode flag: `horus.exe sample.exe` runs immediately. Network access is always opt-in through `--enrich`.
 
+### New in v4.1
+
+- **Case change feed** — each refresh records files added, modified, restored, newly missing, or removed by `--prune`, plus changed assessments. Inspect the current run in `case.json`, `changes.csv`, or the offline dashboard.
+- **Machine-readable PE diff** — `horus --diff a.exe b.exe --json` returns structured comparison data. Incomplete or non-PE comparisons set `analysis_status` to `unknown` and exit 3.
+- **Stricter input handling** — additional malformed-PE bounds checks and rejection of conflicting `--gui`/`--html` combinations with scan, diff, or each other.
+
 ### New in v4.0
 
 - **Persistent Case Mode** — analyze up to 5,000 files with incremental refresh, `--verify`, `--rebuild`, `--prune`, portable relative paths, and atomic state.
@@ -88,6 +94,8 @@ Direct file analysis needs no mode flag: `horus.exe sample.exe` runs immediately
 
 ## Terminal Preview
 
+Illustrative output only. The file, indicators, provider result, and verdict below are fictional; no scan or provider lookup produced this example.
+
 ```
   _   _  ___  ____  _   _ ____
  | | | |/ _ \|  _ \| | | / ___|
@@ -103,7 +111,7 @@ FILE ─────────────────────────
   size              102,912 bytes
   MD5               a3f5d1e2c7b849d60e14a2b8f93c5d17
   SHA-1             4b2e8a91c3d056f7e820b4a19c6d3f7e2b085c40
-  SHA-256           e3b0c44298fc1c149afbf4c8996fb924...852b855
+  SHA-256           470735e5b9545078198d440e67abbf86...dad3f57d
 
 PE HEADER ───────────────────────────────────────────────────────
   type              executable
@@ -143,8 +151,8 @@ CAPABILITIES ──────────────────────�
   ! Known packer section name 'UPX0'                                    +16
 
 EMBEDDED INDICATORS  (from strings) ────────────────────────────
-  url    http://185.220.101.5:8080/gate.php
-  ip     185.220.101.5
+  url    http://192.0.2.42:8080/gate.php
+  ip     192.0.2.42
   tokens  cmd.exe  schtasks  powershell
 
 THREAT INTELLIGENCE ─────────────────────────────────────────────
@@ -253,7 +261,7 @@ options:
   --no-recurse          analyze only the top level of a case directory
   --online-trust        allow online Authenticode revocation checks
   --scan <dir>          triage every file in a folder, worst-first
-  --diff <a> <b>        compare two PEs (imphash / TLSH / section entropy)
+  --diff <a> <b>        compare two PEs (add --json for structured output)
   --clip                read the indicator from the clipboard
   --gui                 open the glass-console GUI (unified build)
   --html <file>         write the glass-console report to an HTML file
@@ -264,7 +272,7 @@ options:
   --abuse-key <key>     AbuseIPDB API key        (overrides ABUSEIPDB_API_KEY env)
   --strings             dump extracted ASCII/UTF-16 strings from the file
   --profile             verbose UEBA signal breakdown
-  --json                machine-readable JSON output (exit code 1 = suspicious/malicious)
+  --json                machine-readable JSON (including case and diff modes)
   --no-color            disable ANSI colour (auto-disabled when piped)
   -h, --help            show this help
   --version             print the version
@@ -308,33 +316,52 @@ horus.exe --case C:\Cases\incoming --verify --enrich --gui
 horus.exe --case C:\Cases\incoming --rebuild --cluster-mode conservative
 ```
 
-Each workspace contains private state under `.horus` and portable exports named `case.json`, `report.html`, `samples.csv`, `clusters.csv`, and `iocs.csv`. Stored paths are relative to the samples directory.
+Each workspace contains private state under `.horus` and portable exports named `case.json`, `report.html`, `samples.csv`, `clusters.csv`, `iocs.csv`, and `changes.csv`. Stored paths are relative to the samples directory.
+
+On each refresh, the top-level `changes` array in `case.json` and `changes.csv` describe what changed in that run. `summary.changes` gives the event count. Events distinguish `added`, `modified`, `restored`, `missing`, `removed` (with `--prune`), and `assessment_changed`. An unchanged file may get `assessment_changed` when its analysis status, score, verdict, or intel summary changes. Each event includes a relative path and available before/after SHA-256, analysis status, and score. This feed describes the latest refresh, not every past run. Files marked missing stay in case history until pruned. Use `--verify` to detect content changes that preserve both file size and modification time.
+
+```powershell
+$case = Get-Content C:\Cases\incoming.horus-case\case.json -Raw | ConvertFrom-Json
+$case.summary.changes
+$case.changes | Where-Object kind -eq 'assessment_changed'
+```
+
+### PE Comparison
+
+```powershell
+horus.exe --diff C:\Samples\a.exe C:\Samples\b.exe
+horus.exe --diff C:\Samples\a.exe C:\Samples\b.exe --json
+```
+
+The JSON form includes each file's analysis status and a `comparison` object with hash matches, TLSH distance, and section entropy drift where available. When one or both files cannot be fully analyzed as PEs, the top-level `analysis_status` is `unknown` and the command exits 3. A file read or usage error exits 2; a complete comparison exits 1 if either file is scored suspicious or malicious, otherwise 0.
 
 ### IOC Lookup Examples
+
+The reserved IP addresses and domains below illustrate command syntax; they are not active threat indicators. Live provider results are not guaranteed for them.
 
 ```bat
 :: MD5, SHA-1, or SHA-256 hash — Horus auto-detects the type
 horus 44d88612fea8a8f36de82e1278abb02f --enrich
 horus 3395856ce81f2b7382dee72602f798b642f14d0 --enrich
-horus 275a021bbfb6489e54d471899f7db9d1663fc695b2cfad87ef3ef... --enrich
+horus 470735e5b9545078198d440e67abbf86a43c29ae579eba1cf632eaa8dad3f57d --enrich
 
 :: IP reputation from VirusTotal + AbuseIPDB simultaneously
-horus 185.220.101.5 --enrich
+horus 192.0.2.42 --enrich
 
 :: Domain reputation
-horus evil-c2-domain.ru --enrich
+horus suspicious.example --enrich
 
 :: Full URL
 horus https://sketchy.example/drop.bin --enrich
 
 :: Email address
-horus attacker@phishing-domain.com --enrich
+horus sender@example.com --enrich
 
 :: Combine keys inline instead of via env vars
-horus 1.2.3.4 --enrich --vt-key abc123 --abuse-key def456
+horus 192.0.2.42 --enrich --vt-key abc123 --abuse-key def456
 
 :: JSON output for automation
-horus 185.220.101.5 --enrich --json
+horus 192.0.2.42 --enrich --json
 ```
 
 ### Scripting / Automation
@@ -365,6 +392,8 @@ Get-ChildItem C:\Quarantine\*.exe | ForEach-Object {
 
 ### JSON Output Format
 
+Illustrative structure and values; this is not the output of a real sample.
+
 ```json
 {
   "target":       "malware.exe",
@@ -372,7 +401,7 @@ Get-ChildItem C:\Quarantine\*.exe | ForEach-Object {
   "size":          102912,
   "md5":          "a3f5d1e2c7b849d60e14a2b8f93c5d17",
   "sha1":         "4b2e8a91c3d056f7e820b4a19c6d3f7e2b085c40",
-  "sha256":       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "sha256":       "470735e5b9545078198d440e67abbf86a43c29ae579eba1cf632eaa8dad3f57d",
   "is_pe":         true,
   "bitness":       64,
   "imphash":      "9a4f2c8d1e7b3056a82c914d6e0f5b17",
@@ -533,7 +562,7 @@ The imphash follows the Mandiant recipe: lowercase `dll.function` pairs (with ex
 ## Safety and Limitations
 
 - Horus never executes, copies, modifies, or uploads a sample. It only writes requested reports, case state, and local cache files.
-- The PE parser **bounds-checks every offset and length** before reading. Feeding it a malformed or malicious sample is safe.
+- The PE parser checks offsets and lengths before reading and rejects malformed structures it detects. Keep Horus updated and analyze untrusted samples in a suitable environment.
 - Network access is off by default. `--enrich` sends only hashes and extracted indicators to configured providers; `--online-trust` separately enables online certificate revocation checks.
 - The static risk score is a **triage aid**, not a production verdict. Pair it with independent evidence and, for anything that matters, a controlled sandbox detonation.
 - Obfuscated samples that load all their imports at runtime will score low on static analysis — that's expected. The entropy and packing heuristics partially compensate, but there's no substitute for dynamic analysis on heavily obfuscated code.

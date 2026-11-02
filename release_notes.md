@@ -1,3 +1,34 @@
+## HORUS v4.1.0
+
+### Review changes between case refreshes
+
+- Each refresh records events for files added, modified, restored after going missing,
+  newly missing, or removed from case history by `--prune`. When file content is
+  unchanged, a changed analysis status, score, verdict, or intel summary is
+  reported as `assessment_changed`.
+- The current run's feed appears in the top-level `changes` array of `case.json`,
+  `summary.changes`, `changes.csv`, and the offline dashboard. It is a per-run view,
+  not a complete historical audit log.
+- Missing files remain in case history unless `--prune` is requested. A subsequent
+  refresh can identify a restored file. Use `--verify` to catch content changes
+  that preserve both file size and modification time.
+
+### Scriptable PE comparison and input handling
+
+- `horus --diff a.exe b.exe --json` emits a structured comparison for automation.
+  Incomplete or non-PE comparisons set `analysis_status` to `unknown` and exit 3
+  instead of implying that PE similarity was assessed.
+- Malformed PE inputs receive additional bounds checks. Conflicting `--gui` and
+  `--html` combinations with scan, diff, or each other are rejected as usage errors.
+
+### Release
+
+- Official target: Windows 10/11 x64. The three executables share version 4.1.0.
+- The tag workflow builds and tests the release, publishes SHA-256 checksums, and
+  creates GitHub artifact attestations. Binaries remain Authenticode-unsigned.
+
+---
+
 ## Horus v4.0.0
 
 ### Persistent cases

@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HORUS v4 — persistent case analysis for Windows</title>
-<meta name="description" content="A self-contained Windows malware triage tool with direct file analysis, persistent cases, explainable PE similarity clusters, and opt-in IOC enrichment.">
-<meta name="keywords" content="malware analysis, persistent case analysis, IOC enrichment, PE static analysis, Windows malware triage, similarity clustering, VirusTotal, AbuseIPDB, threat intelligence, DFIR, incident response, SOC tools, portable executable analysis, reverse engineering, security tool, zero dependency, open source">
+<title>HORUS v4.1 — Windows malware triage and case change tracking</title>
+<meta name="description" content="A self-contained Windows malware triage tool with direct PE analysis, per-run case change tracking, machine-readable PE diff, and opt-in IOC enrichment.">
+<meta name="keywords" content="malware analysis, case change tracking, persistent case analysis, PE diff, IOC enrichment, PE static analysis, Windows malware triage, similarity clustering, VirusTotal, AbuseIPDB, threat intelligence, DFIR, incident response, SOC tools, portable executable analysis, reverse engineering, security tool, zero dependency, open source">
 <meta name="author" content="Mobin Erteghaie">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="theme-color" content="#0d1117">
@@ -13,8 +13,8 @@
 <link rel="sitemap" type="application/xml" href="/HORUS/sitemap.xml">
 
 <meta property="og:site_name" content="HORUS">
-<meta property="og:title" content="HORUS v4 — persistent case analysis for Windows">
-<meta property="og:description" content="Direct file triage and portable cases for up to 5,000 samples in one zero-dependency Windows executable.">
+<meta property="og:title" content="HORUS v4.1 — Windows malware triage and case change tracking">
+<meta property="og:description" content="Direct file triage, per-run case changes, and scriptable PE comparison in one portable Windows executable.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mobinert.github.io/HORUS/">
 <meta property="og:image" content="https://mobinert.github.io/HORUS/banner.png">
@@ -22,8 +22,8 @@
 <meta property="og:image:height" content="440">
 <meta name="twitter:image" content="https://mobinert.github.io/HORUS/banner.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="HORUS v4 — persistent case analysis for Windows">
-<meta name="twitter:description" content="Direct PE triage, portable cases, explainable similarity clusters, and opt-in enrichment in one Windows executable.">
+<meta name="twitter:title" content="HORUS v4.1 — Windows malware triage and case change tracking">
+<meta name="twitter:description" content="Direct PE triage, case change feeds, scriptable PE diff, and opt-in enrichment in one Windows executable.">
 
 <script type="application/ld+json">
 {
@@ -32,8 +32,8 @@
   "name": "HORUS",
   "applicationCategory": "SecurityApplication",
   "operatingSystem": "Windows 10/11 x64",
-  "softwareVersion": "4.0.0",
-  "description": "A self-contained Windows malware triage tool with direct file analysis, persistent cases, explainable PE similarity clusters, and opt-in IOC enrichment.",
+  "softwareVersion": "4.1.0",
+  "description": "A self-contained Windows malware triage tool with direct file analysis, per-run case changes, machine-readable PE comparison, and opt-in IOC enrichment.",
   "url": "https://mobinert.github.io/HORUS/",
   "downloadUrl": "https://github.com/mobinert/HORUS/releases/latest",
   "codeRepository": "https://github.com/mobinert/HORUS",
@@ -106,6 +106,7 @@
   .term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
   .term .bar .t{margin-left:10px;color:var(--dim);font-size:12px;font-family:ui-monospace,monospace}
   .term pre{margin:0;padding:15px 16px 17px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.55;color:#c4d0dd;overflow-x:auto}
+  .preview-note{margin:8px 2px 0;color:var(--mut);font-size:12px;line-height:1.5}
   .c-dim{color:var(--dim)} .c-cyan{color:var(--cyan)} .c-green{color:var(--green)}
   .c-hit{color:var(--susp)} .c-mal{color:var(--mal);font-weight:700}
   .tagline{color:var(--green)}
@@ -189,9 +190,9 @@
 
   <div class="heroGrid">
     <div>
-      <span class="eyebrow">𓂀 v4.0 · Windows 10/11 x64 · C++17</span>
+      <span class="eyebrow">𓂀 v4.1 · Windows 10/11 x64 · C++17</span>
       <h1>Analyze one file. <span class="g">Keep the whole case.</span></h1>
-      <p class="lede">One self-contained <code>.exe</code> for direct malware triage and persistent cases — static PE analysis, explainable similarity clusters, and opt-in threat-intel enrichment. <b>No Python, no installer, zero dependencies.</b></p>
+      <p class="lede">One self-contained <code>.exe</code> for direct malware triage and persistent cases — static PE analysis, per-run change tracking, scriptable comparisons, and opt-in threat-intel enrichment. <b>No Python, no installer, zero runtime dependencies.</b></p>
       <div class="cta">
         <a class="btn primary" href="https://github.com/mobinert/HORUS/releases/latest">⬇ Download horus.exe</a>
         <a class="btn ghost" href="#start">Quick start</a>
@@ -204,12 +205,13 @@
       </div>
     </div>
 
+    <div>
     <div class="term" aria-hidden="true">
-      <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Windows Terminal</span></div>
+      <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Illustrative terminal preview</span></div>
 <pre><span class="c-dim">&gt;</span> horus ransomware_sample.exe --enrich
 
 <span class="c-dim">FILE ─────────────────────────────────</span>
-  SHA-256   e3b0c44298fc1c14…f924852b855
+  SHA-256   470735e5b9545078…32eaa8dad3f57d
 <span class="c-dim">PE HEADER ─────────────────────────────</span>
   bitness   64-bit (PE32+)
   compiled  2018-11-06  <span class="c-hit">(suspicious)</span>
@@ -222,11 +224,13 @@
   <span class="c-hit">! Crypto + network I/O (exfil pattern)  +12</span>
   <span class="c-hit">! RWX section 'UPX0' (packed)           +18</span>
 <span class="c-dim">EMBEDDED IOCs ─────────────────────────</span>
-  url  http://185.220.101.5:8080/gate.php
+  url  http://192.0.2.42:8080/gate.php
 <span class="c-dim">VIRUSTOTAL ────────────────────────────</span>
   61/72 — Ransom.FileCryptor  <span class="c-mal">(Malicious)</span>
 <span class="c-dim">VERDICT ───────────────────────────────</span>
   <span class="c-mal">[ LIKELY MALICIOUS ]   risk 98/100</span></pre>
+    </div>
+    <p class="preview-note">Fictional sample and provider result. This is a layout preview, not evidence from a scan.</p>
     </div>
   </div>
 </header>
@@ -238,7 +242,7 @@
     <p class="sub"><code class="mono">horus.exe sample.exe</code> runs direct analysis with no case setup. Use <code class="mono">--case</code> when you want repeatable analysis across a sample directory.</p>
     <div class="inputs">
       <div class="row"><div class="k">a file path</div><div class="v">Hashes and inventories any file; valid PEs also get parsing, signature checks, capabilities, ATT&amp;CK, UEBA, and a scored verdict</div></div>
-      <div class="row"><div class="k">a samples directory</div><div class="v"><code>--case</code> inventories up to 5,000 files, preserves state, finds exact duplicates, and clusters related valid PEs</div></div>
+      <div class="row"><div class="k">a samples directory</div><div class="v"><code>--case</code> inventories up to 5,000 files, tracks changes on each refresh, finds exact duplicates, and clusters related valid PEs</div></div>
       <div class="row"><div class="k">a hash</div><div class="v">Classifies MD5, SHA-1 or SHA-256 locally; <code>--enrich</code> opts in to VirusTotal</div></div>
       <div class="row"><div class="k">an IP address</div><div class="v">Classifies it locally; <code>--enrich</code> opts in to VirusTotal and AbuseIPDB lookups</div></div>
       <div class="row"><div class="k">a domain / URL</div><div class="v">Classifies it locally; <code>--enrich</code> opts in to configured reputation providers</div></div>
@@ -253,13 +257,14 @@
     <h2>Real static analysis, not just a hash lookup</h2>
     <div class="grid">
       <div class="feat"><div class="ic">🧮</div><h3>Hashing</h3><p>MD5, SHA-1 and SHA-256 computed via Windows BCrypt/CNG — plus a Mandiant-compatible imphash for family pivoting.</p></div>
-      <div class="feat"><div class="ic">🧷</div><h3>PE parser</h3><p>PE32 / PE32+ headers, sections and imports — every offset and length bounds-checked, so malformed samples are safe to feed it.</p></div>
+      <div class="feat"><div class="ic">🧷</div><h3>PE parser</h3><p>PE32 / PE32+ headers, sections and imports with checked offsets and lengths; malformed structures are rejected when detected.</p></div>
       <div class="feat"><div class="ic">🌡️</div><h3>Entropy &amp; packing</h3><p>Per-section Shannon entropy flags packed/encrypted regions and known packers (UPX, Themida, VMProtect…).</p></div>
       <div class="feat"><div class="ic">🧠</div><h3>Capability scoring</h3><p>~110 Windows APIs mapped to the capabilities they imply — injection, keylogging, persistence, evasion — and the dangerous <i>combinations</i>.</p></div>
       <div class="feat"><div class="ic">🗂️</div><h3>Persistent cases</h3><p>Incremental refresh, verify, rebuild, prune, portable relative paths, and searchable offline exports for directories of up to 5,000 files.</p></div>
+      <div class="feat"><div class="ic">🔎</div><h3>What changed?</h3><p>Each refresh shows added, modified, restored, and missing files, plus files removed by <code>--prune</code> or given a changed assessment, in the dashboard, <code>case.json</code>, and <code>changes.csv</code>.</p></div>
       <div class="feat"><div class="ic">🔗</div><h3>Explainable similarity</h3><p>SHA-256 duplicate groups for every file and representative-based PE clusters using TLSH plus structural fingerprints — without claiming a definitive family.</p></div>
       <div class="feat"><div class="ic">🛰️</div><h3>Opt-in enrichment</h3><p><code>--enrich</code> sends only hashes and extracted indicators to configured VirusTotal and AbuseIPDB providers. Sample bytes are never uploaded.</p></div>
-      <div class="feat"><div class="ic">🧩</div><h3>JSON + exit codes</h3><p><code>--json</code> for automation; exit codes distinguish suspicious results, fatal errors, and incomplete or <code>UNKNOWN</code> analysis.</p></div>
+      <div class="feat"><div class="ic">🧩</div><h3>JSON + exit codes</h3><p><code>--json</code> also works with <code>--diff</code> for scriptable PE comparison. Exit code 3 and <code>analysis_status: unknown</code> mark incomplete comparisons.</p></div>
     </div>
   </div>
 </section>
@@ -307,7 +312,7 @@
     <div class="steps">
       <div class="step"><div><code>Download horus.exe from the Releases page</code><div class="d">One file. Put it on your PATH, or just run it from any folder.</div></div></div>
       <div class="step"><div><code>.\horus.exe suspicious.exe</code><div class="d">Full static PE analysis + hashing — works with no API keys at all.</div></div></div>
-      <div class="step"><div><code>.\horus.exe --case C:\Samples --gui</code><div class="d">Create or refresh a portable case and open its searchable offline report.</div></div></div>
+      <div class="step"><div><code>.\horus.exe --case C:\Samples --gui</code><div class="d">Create or refresh a portable case and review its current change feed in the offline report.</div></div></div>
       <div class="step"><div><code>$env:VT_API_KEY = "…"  ;  .\horus.exe suspicious.exe --enrich</code><div class="d">Optional: explicitly enable live reputation lookups for hashes and extracted indicators.</div></div></div>
     </div>
     <div class="cta" style="margin-top:22px">
@@ -323,7 +328,7 @@
     <h2>Read-only by design</h2>
     <div class="safe">
       <div><b>It never runs the sample.</b> Horus reads sample bytes without executing, copying, modifying, or uploading them. It writes only requested reports, case state, and local cache data.</div>
-      <div><b>Malformed samples are safe.</b> The PE parser bounds-checks every offset and length before reading.</div>
+      <div><b>Malformed input handling.</b> The PE parser checks offsets and lengths and rejects invalid structures it detects. Keep the tool updated when analyzing untrusted files.</div>
       <div><b>A triage aid, not a final verdict.</b> Pair the static score with VirusTotal consensus and, for anything that matters, a sandbox detonation.</div>
       <div><b>Static analysis has limits.</b> Heavily obfuscated samples that resolve imports at runtime score low — that's expected; entropy heuristics only partly compensate.</div>
     </div>
